@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>White Cat Cleaners</title>
+    <script>
+      // Aggressively suppress benign Vite HMR errors in the preview environment
+      (function() {
+        const suppressPatterns = [
+          'WebSocket closed without opened',
+          '[vite] failed to connect to websocket',
+          'failed to connect to websocket'
+        ];
+        
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        console.error = function(...args) {
+          const msg = args.join(' ');
+          if (suppressPatterns.some(p => msg.includes(p))) return;
+          originalError.apply(console, args);
+        };
+        
+        console.warn = function(...args) {
+          const msg = args.join(' ');
+          if (suppressPatterns.some(p => msg.includes(p))) return;
+          originalWarn.apply(console, args);
+        };
+
+        window.addEventListener('unhandledrejection', (event) => {
+          const reason = event.reason?.message || String(event.reason);
+          if (suppressPatterns.some(p => reason.includes(p))) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('error', (event) => {
+          const msg = event.message || '';
+          if (suppressPatterns.some(p => msg.includes(p))) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
