@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 
 type User = {
   id: string;
-  role: "guest" | "homeowner" | "cleaner" | "admin";
+  role: "guest" | "homeowner" | "cleaner" | "admin" | "demo_admin";
   email: string;
   full_name?: string;
   profile_picture?: string;
@@ -26,6 +26,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         return JSON.parse(stored);
       } catch (e) {
+        console.error("Error parsing stored user:", e);
+        localStorage.removeItem("user");
         return null;
       }
     }

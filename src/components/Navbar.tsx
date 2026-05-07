@@ -22,43 +22,44 @@ export default function Navbar() {
   };
 
   return (
-    <nav className="bg-white/70 backdrop-blur-xl border-b border-slate-200/50 sticky top-0 z-50 transition-all duration-300">
+    <nav className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50 transition-all duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-24">
-          <div className="flex items-center gap-12">
-            <Link to="/" className="flex-shrink-0 flex items-center gap-4 group">
-              <div className="bg-emerald-600 p-3 rounded-2xl shadow-lg shadow-emerald-200 group-hover:bg-emerald-500 transition-all group-hover:rotate-6 group-hover:scale-110">
-                <Cat className="h-6 w-6 text-white" />
+        <div className="flex justify-between h-20">
+          <div className="flex items-center gap-8">
+            <Link to="/" className="flex-shrink-0 flex items-center gap-3 group">
+              <div className="bg-slate-900 p-2 rounded-xl group-hover:bg-emerald-600 transition-colors">
+                <Cat className="h-5 w-5 text-white" />
               </div>
-              <span className="font-display font-black text-2xl md:text-3xl text-slate-900 tracking-tighter">{t('common.site_name_short')}</span>
+              <span className="font-display font-bold text-xl text-slate-900 tracking-tight">{t('common.site_name_short')}</span>
             </Link>
-            <div className="hidden lg:flex items-center gap-10">
-              <Link to="/" className="text-sm font-bold text-slate-500 hover:text-emerald-600 transition-colors uppercase tracking-widest">{t('nav.about')}</Link>
-              <Link to="/team" className="text-sm font-bold text-slate-500 hover:text-emerald-600 transition-colors uppercase tracking-widest">{t('nav.team')}</Link>
-              <Link to="/quote" className="text-sm font-bold text-slate-500 hover:text-emerald-600 transition-colors uppercase tracking-widest">{t('nav.quote')}</Link>
-              <Link to="/careers" className="text-sm font-bold text-slate-500 hover:text-emerald-600 transition-colors uppercase tracking-widest">{t('nav.careers')}</Link>
+            <div className="hidden lg:flex items-center gap-6">
+              <Link to="/" className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors uppercase tracking-wider">{t('nav.about')}</Link>
+              <Link to="/team" className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors uppercase tracking-wider">{t('nav.team')}</Link>
+              <Link to="/quote" className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors uppercase tracking-wider">{t('nav.quote')}</Link>
+              <Link to="/careers" className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors uppercase tracking-wider">{t('nav.careers')}</Link>
             </div>
           </div>
-          <div className="flex items-center gap-3 md:gap-6">
-            <div className="hidden md:flex items-center gap-6">
+          <div className="flex items-center gap-2 md:gap-4">
+            <div className="hidden md:flex items-center gap-2">
               <button
                 onClick={toggleLanguage}
-                className="text-slate-500 hover:text-emerald-600 font-bold flex items-center gap-2 transition-colors px-3 py-2 rounded-xl hover:bg-slate-100"
+                className="text-slate-500 hover:text-slate-900 font-semibold flex items-center gap-1.5 transition-colors px-3 py-1.5 rounded-lg hover:bg-slate-100"
                 title="Toggle Language"
               >
-                <Globe className="h-5 w-5" />
-                <span className="text-xs uppercase tracking-tighter">{i18n.language.startsWith('fr') ? 'FR' : 'EN'}</span>
+                <Globe className="h-4 w-4" />
+                <span className="text-[10px] uppercase tracking-wider">{i18n.language.startsWith('fr') ? 'FR' : 'EN'}</span>
               </button>
               {user ? (
-                <div className="flex items-center gap-4">
-                  <NotificationBell />
-                  <div className="h-8 w-px bg-slate-200 mx-2"></div>
+                <div className="flex items-center gap-2">
+                  <div className="hidden md:flex">
+                    <NotificationBell />
+                  </div>
                   <Link
                     to={user.role === "admin" ? "/admin" : user.role === "cleaner" ? "/cleaner" : "/dashboard"}
-                    className="text-slate-700 hover:text-emerald-600 font-bold flex items-center gap-2 transition-colors bg-slate-50 px-4 py-2 rounded-xl border border-slate-100"
+                    className="text-slate-700 hover:text-slate-900 font-semibold flex items-center gap-2 transition-colors bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200"
                   >
                     {user.profile_picture ? (
-                      <img src={user.profile_picture} alt="Profile" className="h-6 w-6 rounded-full object-cover border border-slate-200" />
+                      <img src={user.profile_picture} alt="Profile" className="h-5 w-5 rounded-full object-cover" />
                     ) : (
                       <UserIcon className="h-4 w-4" />
                     )}
@@ -66,27 +67,27 @@ export default function Navbar() {
                   </Link>
                   <Link
                     to="/settings"
-                    className="p-2.5 text-slate-500 hover:text-emerald-600 hover:bg-slate-100 rounded-xl transition-all"
+                    className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-all"
                     title={t('nav.settings') || "Settings"}
                   >
-                    <Settings className="h-5 w-5" />
+                    <Settings className="h-4 w-4" />
                   </Link>
                   <button
                     onClick={handleLogout}
-                    className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
                     title={t('nav.logout')}
                   >
-                    <LogOut className="h-5 w-5" />
+                    <LogOut className="h-4 w-4" />
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center gap-4">
-                  <Link to="/login" className="text-slate-600 hover:text-slate-900 font-bold transition-colors px-4 py-2">
+                <div className="flex items-center gap-2">
+                  <Link to="/login" className="text-slate-600 hover:text-slate-900 font-semibold transition-colors px-3 py-1.5">
                     {t('nav.login')}
                   </Link>
                   <Link
                     to="/register"
-                    className="bg-slate-900 text-white px-8 py-3.5 rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 hover:shadow-2xl hover:-translate-y-1 active:scale-95"
+                    className="bg-slate-900 text-white px-5 py-2 rounded-lg font-semibold hover:bg-slate-800 transition-all text-sm"
                   >
                     {t('nav.signup')}
                   </Link>
@@ -95,8 +96,8 @@ export default function Navbar() {
             </div>
             
             {/* Mobile Menu Button */}
-            <div className="lg:hidden flex items-center gap-3">
-              {user && <NotificationBell />}
+            <div className="lg:hidden flex items-center gap-2">
+              {user && <div className="md:hidden"><NotificationBell /></div>}
               <button
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
                 className="p-2 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors"

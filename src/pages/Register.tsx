@@ -13,6 +13,8 @@ export default function Register() {
   const [fullName, setFullName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [bio, setBio] = useState("");
+  const [languages, setLanguages] = useState("");
+  const [preferredLanguage, setPreferredLanguage] = useState("English");
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [cv, setCv] = useState<string | null>(null);
   const [cvName, setCvName] = useState<string | null>(null);
@@ -51,6 +53,16 @@ export default function Register() {
           phone_number: phoneNumber,
           profile_picture: profilePicture,
           cv,
+          preferences: JSON.stringify({
+            ...(role === "cleaner" ? { languages } : { preferred_language: preferredLanguage }),
+            notifications: true,
+            email_notifications: true,
+            sms_notifications: false,
+            marketing: false,
+            preferred_time: "morning",
+            has_pets: false,
+            entry_instructions: ""
+          }),
           ...(role === "cleaner" && {
             bio
           })
@@ -225,6 +237,17 @@ export default function Register() {
           {role === "cleaner" && (
             <>
               <div className="space-y-2">
+                <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('register.languages_spoken') || "Languages Spoken"}</label>
+                <input
+                  type="text"
+                  required
+                  value={languages}
+                  onChange={(e) => setLanguages(e.target.value)}
+                  className="w-full px-5 py-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-medium shadow-sm"
+                  placeholder={t('register.languages_placeholder') || "e.g., English, Spanish"}
+                />
+              </div>
+              <div className="space-y-2">
                 <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('register.tell_us_about_yourself')}</label>
                 <textarea
                   required
@@ -263,6 +286,20 @@ export default function Register() {
                 </div>
               </div>
             </>
+          )}
+
+          {role === "homeowner" && (
+            <div className="space-y-2">
+              <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('register.preferred_language') || "Preferred Language"}</label>
+              <input
+                type="text"
+                required
+                value={preferredLanguage}
+                onChange={(e) => setPreferredLanguage(e.target.value)}
+                className="w-full px-5 py-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-medium shadow-sm"
+                placeholder={t('register.preferred_language_placeholder') || "e.g., English"}
+              />
+            </div>
           )}
           
           <div className="space-y-2">

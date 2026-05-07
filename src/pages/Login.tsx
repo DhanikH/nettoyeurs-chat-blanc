@@ -39,6 +39,8 @@ export default function Login() {
         login(data);
         if (data.role === "cleaner") {
           navigate("/cleaner");
+        } else if (data.role === "admin") {
+          navigate("/admin");
         } else {
           navigate("/dashboard");
         }

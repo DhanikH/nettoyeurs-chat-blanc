@@ -17,32 +17,36 @@ export const NotificationBell: React.FC = () => {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const fetchNotifications = async () => {
-    if (!user) return;
+    if (!user) {
+      console.log("No user, skipping fetchNotifications");
+      return;
+    }
     try {
-      const res = await fetch(`/api/notifications/${user.id}`);
-      if (res.ok) {
-        const contentType = res.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const data = await res.json();
-          setNotifications(data);
-        } else {
-          console.error("Expected JSON response from notifications API, but got:", contentType);
-        }
+      console.log("User object:", user);
+      if (!user || !user.id) {
+        console.error("User object is invalid:", user);
+        return;
+      }
+      const url = `/api/notifications?userId=${user.id}`;
+      console.log("Fetching notifications from:", url);
+      const res = await fetch(url);
+      console.log("Response status:", res.status, "Content-Type:", res.headers.get("content-type"));
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Fetch failed:", res.status, errorText);
+        throw new Error(`HTTP error! status: ${res.status}, body: ${errorText}`);
+      }
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        setNotifications(data);
       } else {
-        let message = res.statusText || "Unknown error";
-        try {
-          const contentType = res.headers.get("content-type");
-          if (contentType && contentType.includes("application/json")) {
-            const errorData = await res.json();
-            message = errorData.message || errorData.error || message;
-          }
-        } catch (e) {
-          // Ignore JSON parse error
-        }
-        console.error("Server error fetching notifications:", message);
+        const text = await res.text();
+        console.error("Expected JSON response from notifications API, but got:", contentType, "Body:", text.substring(0, 100));
       }
     } catch (err) {
       console.error("Error fetching notifications:", err);
+      // Re-throw or handle as needed
     }
   };
 
@@ -65,7 +69,7 @@ export const NotificationBell: React.FC = () => {
   const markAllAsRead = async () => {
     if (!user || unreadCount === 0) return;
     try {
-      const res = await fetch(`/api/notifications/read-all/${user.id}`, { method: 'POST' });
+      const res = await fetch(`${window.location.origin}/api/notifications/read-all/${user.id}`, { method: 'POST' });
       if (res.ok) {
         setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
       }
@@ -125,7 +129,17 @@ export const NotificationBell: React.FC = () => {
                     </p>
                   </div>
                   <div className="mt-2 text-[10px] text-slate-400 uppercase tracking-wider font-bold">
-                    {formatDateTime(new Date(notification.created_at))}
+                    {(() => {
+                      try {
+                        console.log("Notification created_at:", notification.created_at);
+                        const d = new window.Date(notification.created_at);
+                        console.log("Date object:", d);
+                        return formatDateTime(d);
+                      } catch (e) {
+                        console.error("Error formatting date:", e);
+                        return "Invalid Date";
+                      }
+                    })()}
                   </div>
                 </div>
               ))

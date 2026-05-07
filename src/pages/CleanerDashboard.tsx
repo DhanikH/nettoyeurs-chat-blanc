@@ -5,6 +5,10 @@ import { useNavigate } from "react-router-dom";
 import { Briefcase, Calendar as CalendarIcon, CheckCircle, MapPin, DollarSign, Clock, Star, AlertCircle, ChevronLeft, ChevronRight, MessageSquare, Trophy, X, User, Shield, Heart } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CustomerNotes } from "../components/CustomerNotes";
+import { AddonTimeModal } from "../components/AddonTimeModal";
+import JobMediaUpload from "../components/JobMediaUpload";
+import JobMediaDisplay from "../components/JobMediaDisplay";
+import { addons } from "../constants";
 
 export default function CleanerDashboard() {
   const { user, loading } = useAuth();
@@ -15,18 +19,27 @@ export default function CleanerDashboard() {
   const [rating, setRating] = useState<{ averageRating: number; totalReviews: number; level: string; split: number; totalJobs: number; abandonedCount: number }>({ averageRating: 0, totalReviews: 0, level: 'Starter', split: 40, totalJobs: 0, abandonedCount: 0 });
   const [reviews, setReviews] = useState<any[]>([]);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [currentDate, setCurrentDate] = useState(new Date());
   const [claimingJobId, setClaimingJobId] = useState<string | null>(null);
   const [confirmingClaimAbandonedId, setConfirmingClaimAbandonedId] = useState<string | null>(null);
   const [abandoningJobId, setAbandoningJobId] = useState<string | null>(null);
   const [confirmingAbandonId, setConfirmingAbandonId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [selectedSpecificDate, setSelectedSpecificDate] = useState<string>("");
+  const [currentDate, setCurrentDate] = useState(new window.Date());
   const [viewingNotesCustomerId, setViewingNotesCustomerId] = useState<string | null>(null);
   const [viewingNotesCustomerName, setViewingNotesCustomerName] = useState<string>("");
   const [isResubmitting, setIsResubmitting] = useState(false);
-  const [resubmitData, setResubmitData] = useState({ fullName: user?.full_name || "", phoneNumber: user?.phone_number || "", bio: user?.bio || "" });
+  const [resubmitData, setResubmitData] = useState({ fullName: "", phoneNumber: "", bio: "" });
   const [showResubmitForm, setShowResubmitForm] = useState(false);
+  const [showAddonTimeModal, setShowAddonTimeModal] = useState(false);
+  const [selectedJobForAddons, setSelectedJobForAddons] = useState<any>(null);
+  const [uploadedMedia, setUploadedMedia] = useState<Record<string, {id: string, url: string, category: 'before' | 'after'}[]>>({});
+
+  useEffect(() => {
+    if (user) {
+      setResubmitData({ fullName: user.full_name || "", phoneNumber: user.phone_number || "", bio: user.bio || "" });
+    }
+  }, [user]);
 
   useEffect(() => {
     if (actionMessage) {
@@ -41,6 +54,10 @@ export default function CleanerDashboard() {
       return;
     }
     if (user) {
+      if (user.role === "admin") {
+        navigate("/admin");
+        return;
+      }
       if (user.role !== "cleaner") {
         navigate("/dashboard");
         return;
@@ -55,11 +72,54 @@ export default function CleanerDashboard() {
     }
   }, [user, loading, navigate]);
 
+  const filterJobs = (jobs: any[]) => {
+    const fourWeeksFromNow = new window.Date();
+    fourWeeksFromNow.setDate(fourWeeksFromNow.getDate() + 28);
+
+    // Group by subscription_id if it exists
+    const grouped: { [key: string]: any[] } = {};
+    jobs.forEach(job => {
+      if (job.subscription_id) {
+        if (!grouped[job.subscription_id]) grouped[job.subscription_id] = [];
+        grouped[job.subscription_id].push(job);
+      } else {
+        // Non-recurring jobs
+        grouped[job.id] = [job];
+      }
+    });
+
+    const filteredJobs: any[] = [];
+    Object.values(grouped).forEach(group => {
+      // Sort by date
+      group.sort((a, b) => {
+        const dateA = a.scheduled_date ? (a.scheduled_date.includes('T') ? new window.Date(a.scheduled_date) : new window.Date(a.scheduled_date + 'T00:00:00')) : new window.Date(0);
+        const dateB = b.scheduled_date ? (b.scheduled_date.includes('T') ? new window.Date(b.scheduled_date) : new window.Date(b.scheduled_date + 'T00:00:00')) : new window.Date(0);
+        return dateA.getTime() - dateB.getTime();
+      });
+      
+      // Take only those within 4 weeks
+      const within4Weeks = group.filter(job => {
+        if (!job.scheduled_date) return false;
+        const jobDate = job.scheduled_date.includes('T') ? new Date(job.scheduled_date) : new Date(job.scheduled_date + 'T00:00:00');
+        return jobDate <= fourWeeksFromNow;
+      });
+      
+      if (group[0].subscription_id) {
+        // Recurring: take first 4
+        filteredJobs.push(...within4Weeks.slice(0, 4));
+      } else {
+        // Non-recurring: take all within 4 weeks
+        filteredJobs.push(...within4Weeks);
+      }
+    });
+    return filteredJobs;
+  };
+
   const fetchPendingJobs = async () => {
     try {
       const res = await fetch("/api/jobs/pending");
       const data = await res.json();
-      setPendingJobs(data);
+      setPendingJobs(filterJobs(data));
     } catch (err) {
       console.error(err);
     }
@@ -69,7 +129,25 @@ export default function CleanerDashboard() {
     try {
       const res = await fetch(`/api/jobs/cleaner/${user?.id}`);
       const data = await res.json();
-      setMyJobs(data);
+      if (!Array.isArray(data)) {
+        console.error("Expected array, got:", data);
+        return;
+      }
+      
+      // Populate uploadedMedia
+      const newUploadedMedia: Record<string, {id: string, url: string, category: 'before' | 'after'}[]> = {};
+      data.forEach((job: any) => {
+          if (job.job_media && job.job_media.length > 0) {
+              newUploadedMedia[job.id] = job.job_media.map((media: any) => ({
+                  id: media.id,
+                  url: media.url,
+                  category: media.category
+              }));
+          }
+      });
+      setUploadedMedia(newUploadedMedia);
+
+      setMyJobs(filterJobs(data.filter((job: any) => job.job_lifecycle_status !== 'cancelled')));
     } catch (err) {
       console.error(err);
     }
@@ -106,11 +184,21 @@ export default function CleanerDashboard() {
   };
 
   const renderJobDate = (job: any) => {
+    const dateStr = job.specific_date || job.scheduled_date;
+    const hasTime = dateStr && (dateStr.includes('T') || dateStr.includes(':'));
+    
+    const getFormattedDate = (dStr: string) => {
+      const hasT = dStr && (dStr.includes('T') || dStr.includes(':'));
+      return hasT 
+        ? formatDateTime(dStr, { dateStyle: 'short', timeStyle: 'short' })
+        : (job.time_frame ? `${formatDate(dStr, { dateStyle: 'short' })} (${job.time_frame})` : formatDate(dStr, { dateStyle: 'short' }));
+    };
+
     if (job.job_lifecycle_status === 'claimed_scheduled' || job.job_lifecycle_status === 'completed') {
       return (
         <span className="text-emerald-600 font-bold flex items-center gap-1.5">
           <CheckCircle className="w-4 h-4" />
-          Confirmed: {formatDate(job.specific_date || job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+          Confirmed: {getFormattedDate(dateStr)}
         </span>
       );
     }
@@ -119,7 +207,7 @@ export default function CleanerDashboard() {
       return (
         <div className="flex items-center gap-1.5">
           <CalendarIcon className="w-4 h-4 text-slate-400" />
-          {formatDate(job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} - {formatDate(job.scheduled_end_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+          {getFormattedDate(job.scheduled_date)} - {getFormattedDate(job.scheduled_end_date)}
         </div>
       );
     }
@@ -127,7 +215,32 @@ export default function CleanerDashboard() {
     return (
       <div className="flex items-center gap-1.5">
         <CalendarIcon className="w-4 h-4 text-slate-400" />
-        {formatDate(job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+        {getFormattedDate(job.scheduled_date)}
+      </div>
+    );
+  };
+
+  const renderAddonBadges = (job: any) => {
+    const instructions = (() => {
+      try {
+        return JSON.parse(job.special_instructions || '{}');
+      } catch (e) {
+        return {};
+      }
+    })();
+    const selectedAddons = instructions.selected_addons || [];
+    if (selectedAddons.length === 0) return null;
+    
+    return (
+      <div className="flex flex-wrap gap-2 mt-2">
+        {selectedAddons.map((addonId: string, index: number) => {
+          const addon = addons.find(a => a.id === addonId);
+          return addon ? (
+            <span key={`${addonId}-${index}`} className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-[10px] font-bold uppercase tracking-wider">
+              {addon.name}
+            </span>
+          ) : null;
+        })}
       </div>
     );
   };
@@ -189,13 +302,41 @@ export default function CleanerDashboard() {
     }
   };
 
-  const handleComplete = async (jobId: string) => {
+  const handleRelease = async (jobId: string) => {
+    setAbandoningJobId(jobId); // Reuse abandoningJobId for loading state
+    setActionMessage(null);
+    
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cleaner_id: user?.id })
+      });
+      
+      const data = await res.json().catch(() => ({ error: "Server error" }));
+
+      if (res.ok) {
+        setActionMessage({ type: 'success', text: "Job released successfully and is back on the marketplace." });
+        fetchMyJobs();
+        fetchPendingJobs();
+      } else {
+        setActionMessage({ type: 'error', text: data.error || "Failed to release job" });
+      }
+    } catch (err) {
+      console.error(err);
+      setActionMessage({ type: 'error', text: "An error occurred while releasing the job." });
+    } finally {
+      setAbandoningJobId(null);
+    }
+  };
+
+  const handleComplete = async (jobId: string, addonTimes?: Record<string, number>) => {
     setActionMessage(null);
     try {
       const res = await fetch(`/api/jobs/${jobId}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cleaner_id: user?.id })
+        body: JSON.stringify({ cleaner_id: user?.id, addonTimes })
       });
       if (res.ok) {
         setActionMessage({ type: 'success', text: "Job marked as complete!" });
@@ -207,6 +348,24 @@ export default function CleanerDashboard() {
     } catch (err) {
       console.error(err);
       setActionMessage({ type: 'error', text: "Error completing job." });
+    }
+  };
+
+  const initiateComplete = (job: any) => {
+    const specialInstructions = (() => {
+      try {
+        return job.special_instructions ? JSON.parse(job.special_instructions) : {};
+      } catch (e) {
+        return {};
+      }
+    })();
+    const selectedAddons = specialInstructions.selected_addons || [];
+    
+    if (selectedAddons.length > 0) {
+      setSelectedJobForAddons(job);
+      setShowAddonTimeModal(true);
+    } else {
+      handleComplete(job.id);
     }
   };
 
@@ -383,7 +542,16 @@ export default function CleanerDashboard() {
             </div>
             <div>
               <div className="text-[10px] text-emerald-600/80 uppercase tracking-widest font-bold">{t('cleaner_dashboard.total_earned')}</div>
-              <div className="text-xl font-bold font-display tracking-wide">${myJobs.filter(j => j.job_lifecycle_status === 'completed').reduce((sum, job) => sum + (job.cleaner_payout || (job.final_transaction_price * (rating.split / 100))), 0).toFixed(2)}</div>
+              <div className="text-xl font-bold font-display tracking-wide">
+                ${myJobs
+                  .filter(j => j.job_lifecycle_status === 'completed')
+                  .reduce((sum, job) => {
+                    const originalPayout = (job.final_transaction_price * (rating.split / 100)) + (job.rating === 5 ? 15 : 0);
+                    const payout = job.final_cleaner_payout || originalPayout;
+                    return sum + payout + (job.custom_bonus || 0);
+                  }, 0)
+                  .toFixed(2)}
+              </div>
             </div>
           </div>
           
@@ -478,7 +646,7 @@ export default function CleanerDashboard() {
                         </div>
                         <div>
                           <div className="flex items-center gap-1 text-slate-900 font-bold text-2xl font-display">
-                            ${(job.cleaner_payout || (job.final_transaction_price * (rating.split / 100))).toFixed(2)}
+                            ${((job.final_cleaner_payout || ((job.final_transaction_price * (rating.split / 100)) + (job.rating === 5 ? 15 : 0))) + (job.custom_bonus || 0)).toFixed(2)}
                             <span className="text-xs font-medium text-slate-400 uppercase tracking-wider ml-1">{t('cleaner_dashboard.payout')}</span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-slate-500 mt-2">
@@ -499,12 +667,19 @@ export default function CleanerDashboard() {
                               {t('customer_notes')}
                             </button>
                           </div>
+                          {job.frequency && job.frequency !== 'none' && (
+                            <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 mt-2 w-fit">
+                              <CalendarIcon className="w-3 h-3" />
+                              {t('dashboard.recurring') || "Recurring"} ({job.frequency})
+                            </span>
+                          )}
                           {job.address && (
                             <div className="flex items-center gap-2 text-sm text-slate-500 mt-1">
                               <MapPin className="w-4 h-4" />
                               {job.address}
                             </div>
                           )}
+                          {renderAddonBadges(job)}
                         </div>
                       </div>
                       {claimingJobId === job.id ? (
@@ -737,9 +912,9 @@ export default function CleanerDashboard() {
                                   ? 'bg-slate-50 text-slate-400 border-slate-100 line-through' 
                                   : 'bg-emerald-50 text-emerald-700 border-emerald-100'
                               }`}
-                              title={`$${(job.cleaner_payout || (job.final_transaction_price * (rating.split / 100))).toFixed(2)} - ${job.square_feet} sqft ${job.specific_date ? `(Confirmed: ${job.specific_date})` : ''}`}
+                              title={`$${((job.final_cleaner_payout || ((job.final_transaction_price * (rating.split / 100)) + (job.rating === 5 ? 15 : 0))) + (job.custom_bonus || 0)).toFixed(2)} - ${job.square_feet} sqft ${job.specific_date ? `(Confirmed: ${job.specific_date})` : ''}`}
                             >
-                              ${(job.cleaner_payout || (job.final_transaction_price * (rating.split / 100))).toFixed(0)}
+                              ${((job.final_cleaner_payout || ((job.final_transaction_price * (rating.split / 100)) + (job.rating === 5 ? 15 : 0))) + (job.custom_bonus || 0)).toFixed(0)}
                             </div>
                           ))}
                         </div>
@@ -782,7 +957,7 @@ export default function CleanerDashboard() {
                       <div>
                         <div className="flex items-center gap-2 text-slate-900 font-bold text-xl font-display">
                           <DollarSign className="w-5 h-5 text-slate-400" />
-                          {(job.cleaner_payout || (job.final_transaction_price * (rating.split / 100))).toFixed(2)}
+                          {((job.final_cleaner_payout || ((job.final_transaction_price * (rating.split / 100)) + (job.rating === 5 ? 15 : 0))) + (job.custom_bonus || 0)).toFixed(2)}
                         </div>
                         <div className="flex items-center gap-2 text-sm text-slate-500 mt-2">
                           {renderJobDate(job)}
@@ -808,18 +983,33 @@ export default function CleanerDashboard() {
                             {job.address}
                           </div>
                         )}
+                        {renderAddonBadges(job)}
                         
                         {job.homeowner_preferences && (
                           <div className="mt-3 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50 space-y-2">
                             {(() => {
-                              const prefs = JSON.parse(job.homeowner_preferences);
+                              let prefs: any = {};
+                              try {
+                                prefs = JSON.parse(job.homeowner_preferences);
+                              } catch (e) {
+                                console.error("Error parsing homeowner_preferences:", e);
+                              }
                               return (
                                 <>
                                   <div className="flex items-start gap-2 text-xs">
                                     <Shield className="w-3.5 h-3.5 text-indigo-600 mt-0.5" />
                                     <div>
                                       <span className="font-bold text-indigo-900 block uppercase tracking-wider text-[9px] mb-0.5">{t('settings.entry_instructions')}</span>
-                                      <span className="text-indigo-700">{prefs.entry_instructions || "No instructions provided"}</span>
+                                      <span className="text-indigo-700">
+                                        {(() => {
+                                          const jobDate = new Date(job.specific_date || job.scheduled_date);
+                                          const now = new Date();
+                                          const diffInHours = (jobDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+                                          return diffInHours <= 36 
+                                            ? (job.entry_instructions || prefs.entry_instructions || "No instructions provided") 
+                                            : "Available 36h before cleaning";
+                                        })()}
+                                      </span>
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-2 text-xs">
@@ -851,9 +1041,47 @@ export default function CleanerDashboard() {
                     <div className="flex flex-col items-end gap-3">
                       {job.job_lifecycle_status === 'claimed_scheduled' ? (
                         <div className="flex flex-col gap-2">
+                          <JobMediaDisplay 
+                            jobId={job.id} 
+                            media={uploadedMedia[job.id] || []} 
+                            onDelete={(mediaId) => {
+                              setUploadedMedia(prev => ({
+                                ...prev,
+                                [job.id]: (prev[job.id] || []).filter(m => m.id !== mediaId)
+                              }));
+                            }}
+                          />
+                          <JobMediaUpload 
+                            jobId={job.id} 
+                            onUploadComplete={(fileInfo) => {
+                              setUploadedMedia(prev => {
+                                const currentMedia = prev[job.id] || [];
+                                const existingIndex = currentMedia.findIndex(m => m.url === fileInfo.url);
+                                let updatedMedia;
+                                if (existingIndex !== -1) {
+                                  updatedMedia = [...currentMedia];
+                                  updatedMedia[existingIndex] = { ...fileInfo, id: updatedMedia[existingIndex].id };
+                                } else {
+                                  // This is a new upload, we need the ID. 
+                                  // The JobMediaUpload component doesn't return the ID.
+                                  // This might be an issue.
+                                  updatedMedia = [...currentMedia, { ...fileInfo, id: 'new' }];
+                                }
+                                return {
+                                  ...prev,
+                                  [job.id]: updatedMedia
+                                };
+                              });
+                            }}
+                          />
                           <button 
-                            onClick={() => handleComplete(job.id)}
-                            className="px-5 py-2.5 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors flex items-center gap-2 shadow-sm"
+                            onClick={() => initiateComplete(job)}
+                            disabled={!(uploadedMedia[job.id]?.some(m => m.category === 'before') && uploadedMedia[job.id]?.some(m => m.category === 'after'))}
+                            className={`px-5 py-2.5 text-white rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm ${
+                              !(uploadedMedia[job.id]?.some(m => m.category === 'before') && uploadedMedia[job.id]?.some(m => m.category === 'after'))
+                                ? 'bg-slate-300 cursor-not-allowed'
+                                : 'bg-slate-900 hover:bg-slate-800'
+                            }`}
                           >
                             <CheckCircle className="w-4 h-4" /> {t('cleaner_dashboard.mark_complete')}
                           </button>
@@ -880,18 +1108,38 @@ export default function CleanerDashboard() {
                               </div>
                             </div>
                           ) : (
-                            <button 
-                              disabled={abandoningJobId === job.id}
-                              onClick={() => setConfirmingAbandonId(job.id)}
-                              className="px-5 py-2.5 bg-white text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-50 transition-colors flex items-center gap-2 shadow-sm group/abandon disabled:opacity-50"
-                            >
-                              <AlertCircle className={`w-4 h-4 ${abandoningJobId === job.id ? 'animate-spin' : 'group-hover/abandon:animate-pulse'}`} /> 
-                              {abandoningJobId === job.id ? "Abandoning..." : "Abandon Job"}
-                            </button>
+                            <div className="flex flex-col gap-2">
+                              <button 
+                                disabled={abandoningJobId === job.id}
+                                onClick={() => handleRelease(job.id)}
+                                className="px-5 py-2.5 bg-white text-emerald-600 border border-emerald-200 rounded-xl font-medium hover:bg-emerald-50 transition-colors flex items-center gap-2 shadow-sm group/release disabled:opacity-50"
+                              >
+                                <CheckCircle className={`w-4 h-4 ${abandoningJobId === job.id ? 'animate-spin' : 'group-hover/release:animate-pulse'}`} /> 
+                                {abandoningJobId === job.id ? "Releasing..." : "Release Job"}
+                              </button>
+                              <button 
+                                disabled={abandoningJobId === job.id}
+                                onClick={() => setConfirmingAbandonId(job.id)}
+                                className="px-5 py-2.5 bg-white text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-50 transition-colors flex items-center gap-2 shadow-sm group/abandon disabled:opacity-50"
+                              >
+                                <AlertCircle className={`w-4 h-4 ${abandoningJobId === job.id ? 'animate-spin' : 'group-hover/abandon:animate-pulse'}`} /> 
+                                {abandoningJobId === job.id ? "Abandoning..." : "Abandon Job"}
+                              </button>
+                            </div>
                           )}
                         </div>
                       ) : (
                         <>
+                          <JobMediaDisplay 
+                            jobId={job.id} 
+                            media={uploadedMedia[job.id] || []} 
+                            onDelete={(mediaId) => {
+                              setUploadedMedia(prev => ({
+                                ...prev,
+                                [job.id]: (prev[job.id] || []).filter(m => m.id !== mediaId)
+                              }));
+                            }}
+                          />
                           <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
                             <CheckCircle className="w-3.5 h-3.5" /> {t('cleaner_dashboard.completed')}
                           </span>
@@ -908,6 +1156,20 @@ export default function CleanerDashboard() {
               )}
             </div>
           </div>
+
+          <AddonTimeModal
+            isOpen={showAddonTimeModal}
+            onClose={() => setShowAddonTimeModal(false)}
+            onConfirm={(addonTimes) => handleComplete(selectedJobForAddons.id, addonTimes)}
+            addons={selectedJobForAddons ? (() => {
+              try {
+                const instructions = JSON.parse(selectedJobForAddons.special_instructions || '{}');
+                return (instructions.selected_addons || []).map((id: string) => addons.find(a => a.id === id)).filter(Boolean);
+              } catch (e) {
+                return [];
+              }
+            })() : []}
+          />
 
           {/* My Ratings & Reviews */}
           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">

@@ -2,10 +2,51 @@ import { useState, useEffect, useMemo } from "react";
 import { formatDate, formatTime, formatDateTime } from "../utils/dateUtils";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { Shield, CheckCircle, Users, AlertTriangle, Star, Calendar, Home, Briefcase, ChevronLeft, ChevronRight, MapPin, MessageSquare, X, DollarSign, Clock, FileText, Maximize, Layout, ExternalLink, ShieldCheck, Zap, AlertCircle, RefreshCw } from "lucide-react";
+import { Shield, CheckCircle, Users, AlertTriangle, Star, Calendar, Home, Briefcase, ChevronLeft, ChevronRight, MapPin, MessageSquare, X, DollarSign, Clock, FileText, Maximize, Layout, ExternalLink, ShieldCheck, Zap, AlertCircle, RefreshCw, History } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CustomerNotes } from "../components/CustomerNotes";
-import { fetchCmsContent, createCmsEntry, deleteCmsEntry } from "../services/cmsService";
+import { BonusModal } from "../components/BonusModal";
+import { PayoutModal } from "../components/PayoutModal";
+
+const PhotoModal = ({ job, onClose }: { job: any, onClose: () => void }) => {
+  console.log("PhotoModal job:", job);
+  console.log("PhotoModal job_media:", job.job_media);
+  const beforePhotos = job.job_media?.filter((m: any) => m.category === 'before') || [];
+  const afterPhotos = job.job_media?.filter((m: any) => m.category === 'after') || [];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+          <h2 className="text-xl font-bold">Job Photos</h2>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-6 overflow-y-auto space-y-6">
+          <div>
+            <h3 className="font-semibold mb-3">Before</h3>
+            {beforePhotos.length > 0 ? (
+              <div className="grid grid-cols-3 gap-4">
+                {beforePhotos.map((m: any) => <img key={m.id} src={m.url} alt="Before" className="rounded-lg w-full h-32 object-cover" referrerPolicy="no-referrer" />)}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No before photos found for this job.</p>
+            )}
+          </div>
+          <div>
+            <h3 className="font-semibold mb-3">After</h3>
+            {afterPhotos.length > 0 ? (
+              <div className="grid grid-cols-3 gap-4">
+                {afterPhotos.map((m: any) => <img key={m.id} src={m.url} alt="After" className="rounded-lg w-full h-32 object-cover" referrerPolicy="no-referrer" />)}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No after photos found for this job.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default function AdminDashboard() {
   const { user, loading } = useAuth();
@@ -15,52 +56,49 @@ export default function AdminDashboard() {
     "x-user-id": user?.id || "",
     "x-user-role": user?.role || ""
   };
-  const [activeTab, setActiveTab] = useState<"overview" | "applications" | "cleaners" | "properties" | "payments" | "feedback" | "quotes" | "content">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "applications" | "cleaners" | "properties" | "payments" | "feedback" | "quotes" | "invoices" | "history">("overview");
+  const [selectedJobForPhotos, setSelectedJobForPhotos] = useState<any>(null);
+  const [selectedJobForBonus, setSelectedJobForBonus] = useState<any | null>(null);
+  const [selectedJobForPayout, setSelectedJobForPayout] = useState<any | null>(null);
   const [cleaners, setCleaners] = useState<any[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [applicationHistory, setApplicationHistory] = useState<any[]>([]);
   const [badRatings, setBadRatings] = useState<any[]>([]);
   const [allJobs, setAllJobs] = useState<any[]>([]);
   const [allProperties, setAllProperties] = useState<any[]>([]);
+  const [allCharges, setAllCharges] = useState<any[]>([]);
   const [feedback, setFeedback] = useState<any[]>([]);
   const [viewingNotesCustomerId, setViewingNotesCustomerId] = useState<string | null>(null);
   const [viewingNotesCustomerName, setViewingNotesCustomerName] = useState<string>("");
-  const [syncing, setSyncing] = useState<string | null>(null);
-
-  const handleSyncToSanity = async (cleaner: any) => {
-    setSyncing(cleaner.id);
-    try {
-      const res = await fetch(`/api/admin/cleaners/${cleaner.id}/sync-sanity`, {
-        method: "POST",
-        headers: adminHeaders
-      });
-      
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to sync to Sanity");
-      }
-
-      alert(`Successfully synced ${cleaner.full_name} to Sanity!`);
-      fetchCleaners();
-    } catch (err: any) {
-      console.error("Sanity Sync Error:", err);
-      alert(`Failed to sync to Sanity: ${err.message}`);
-    } finally {
-      setSyncing(null);
-    }
-  };
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [successIds, setSuccessIds] = useState<Set<string>>(new Set());
+  const [jobPrices, setJobPrices] = useState<Record<string, number>>({});
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
+  const [tempPrice, setTempPrice] = useState<number>(0);
+  const [cleanerToRemove, setCleanerToRemove] = useState<string | null>(null);
+  const [showRemoveModal, setShowRemoveModal] = useState<boolean>(false);
+  const [addStrike, setAddStrike] = useState<boolean>(false);
+  const [editingDateId, setEditingDateId] = useState<string | null>(null);
+  const [tempScheduledDate, setTempScheduledDate] = useState<string>("");
+  const [editingJobId, setEditingJobId] = useState<string | null>(null);
+  const [tempJobData, setTempJobData] = useState<any>({});
+  const [jobFilterTab, setJobFilterTab] = useState<'all' | 'past' | 'future'>('all');
   
   const [lastSeen, setLastSeen] = useState<Record<string, string>>(() => {
     const saved = localStorage.getItem("admin_last_seen");
-    return saved ? JSON.parse(saved) : {};
+    try {
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("Error parsing admin_last_seen:", e);
+      return {};
+    }
   });
 
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const [currentDate, setCurrentDate] = useState(new window.Date());
 
   useEffect(() => {
     if (activeTab) {
-      const now = new Date().toISOString();
+      const now = new window.Date().toISOString();
       setLastSeen(prev => {
         const next = { ...prev, [activeTab]: now };
         localStorage.setItem("admin_last_seen", JSON.stringify(next));
@@ -85,6 +123,7 @@ export default function AdminDashboard() {
       fetchBadRatings();
       fetchAllJobs();
       fetchAllProperties();
+      fetchCharges();
       fetchFeedback();
     }
   }, [user, loading, navigate]);
@@ -92,13 +131,13 @@ export default function AdminDashboard() {
   const [refreshing, setRefreshing] = useState(false);
 
   const pendingApplications = useMemo(() => {
-    // Start with cleaners who are pending
-    const fromCleaners = cleaners.filter(c => c.is_approved === 0);
+    // Start with cleaners who are pending OR recently approved (successIds)
+    const fromCleaners = cleaners.filter(c => c.is_approved === 0 || successIds.has(c.id));
     
     // Look for any other user who is pending and might be a cleaner
     // (e.g. if they have a CV or bio or were registered as cleaner but missed by the cleaners fetch)
     const fromAllUsers = allUsers.filter(u => 
-      u.is_approved === 0 && 
+      (u.is_approved === 0 || successIds.has(u.id)) && 
       (u.role_designation === 'cleaner' || u.cv || u.bio) &&
       !fromCleaners.find(c => c.id === u.id)
     );
@@ -107,8 +146,8 @@ export default function AdminDashboard() {
     
     // Sort by created_at desc
     return merged.sort((a, b) => {
-      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      const dateA = a.created_at ? new window.Date(a.created_at).getTime() : 0;
+      const dateB = b.created_at ? new window.Date(b.created_at).getTime() : 0;
       return dateB - dateA;
     });
   }, [cleaners, allUsers]);
@@ -116,46 +155,11 @@ export default function AdminDashboard() {
   const fetchCleaners = async () => {
     console.log("[Admin] Fetching cleaners...");
     try {
-      const [localCleaners, sanityCleaners] = await Promise.all([
-        fetch("/api/admin/cleaners", { headers: adminHeaders }).then(r => r.ok ? r.json() : []),
-        fetchCmsContent('cleaner').catch(() => [])
-      ]);
+      const localCleaners = await fetch("/api/admin/cleaners", { headers: adminHeaders }).then(r => r.ok ? r.json() : []);
       console.log("[Admin] Local cleaners fetched:", localCleaners.length);
       
-      // Merge them (prefer local for auth-related things, but Sanity for profile)
-      const merged = [...localCleaners];
-      
-      if (Array.isArray(sanityCleaners) && sanityCleaners.length > 0) {
-        sanityCleaners.forEach(sc => {
-          const existing = merged.find(lc => lc.contact_email === sc.email);
-          if (existing) {
-            existing.full_name = sc.name;
-            existing.bio = sc.bio;
-            existing.role_designation = sc.role;
-            existing.phone_number = sc.phone || existing.phone_number;
-            existing.is_from_sanity = true;
-          } else {
-            merged.push({
-              id: sc._id,
-              full_name: sc.name,
-              contact_email: sc.email,
-              phone_number: sc.phone || '',
-              bio: sc.bio,
-              role_designation: sc.role,
-              is_approved: 1,
-              is_from_sanity: true,
-              averageRating: 5, // Default for sanity-only cleaners
-              totalReviews: 0,
-              totalJobs: 0,
-              level: "Starter",
-              split: 40
-            });
-          }
-        });
-      }
-      
-      const filtered = merged.filter(c => !c.is_deleted);
-      console.log("[Admin] Total merged cleaners:", filtered.length);
+      const filtered = localCleaners.filter((c: any) => !c.is_deleted);
+      console.log("[Admin] Total cleaners:", filtered.length);
       setCleaners(filtered);
     } catch (err) {
       console.error("[Admin] Error fetching cleaners:", err);
@@ -179,33 +183,10 @@ export default function AdminDashboard() {
   const fetchApplicationHistory = async () => {
     console.log("[Admin] Fetching application history...");
     try {
-      const [localApps, sanityApps] = await Promise.all([
-        fetch("/api/admin/applications/history", { headers: adminHeaders }).then(r => r.ok ? r.json() : []),
-        fetchCmsContent('applicant').catch(() => [])
-      ]);
+      const localApps = await fetch("/api/admin/applications/history", { headers: adminHeaders }).then(r => r.ok ? r.json() : []);
       console.log("[Admin] Local applications fetched:", localApps.length);
       
-      const merged = [...localApps];
-      if (Array.isArray(sanityApps) && sanityApps.length > 0) {
-        sanityApps.forEach(sa => {
-          const existing = merged.find(la => la.contact_email === sa.email);
-          if (!existing) {
-            merged.push({
-              id: sa._id,
-              full_name: sa.fullName,
-              contact_email: sa.email,
-              phone_number: sa.phone,
-              bio: sa.bio,
-              is_approved: sa.status === 'approved' ? 1 : sa.status === 'rejected' ? 2 : 0,
-              created_at: new Date().toISOString(),
-              is_from_sanity: true
-            });
-          }
-        });
-      }
-      
-      console.log("[Admin] Total merged applications:", merged.length);
-      setApplicationHistory(merged);
+      setApplicationHistory(localApps);
     } catch (err) {
       console.error("[Admin] Error fetching application history:", err);
     }
@@ -249,7 +230,18 @@ export default function AdminDashboard() {
       const res = await fetch("/api/admin/jobs", { headers: adminHeaders });
       if (res.ok) {
         const data = await res.json();
-        setAllJobs(data);
+        const filtered = (Array.isArray(data) ? data : []).filter((job: any) => job.job_lifecycle_status !== 'cancelled');
+        const uniqueJobs: any[] = [];
+        const ids = new Set();
+        filtered.forEach((j: any) => {
+          if (!ids.has(j.id)) {
+            uniqueJobs.push(j);
+            ids.add(j.id);
+          } else {
+            console.error("Duplicate job ID found, filtering out:", j.id);
+          }
+        });
+        setAllJobs(uniqueJobs);
       }
     } catch (err) {
       console.error(err);
@@ -262,6 +254,18 @@ export default function AdminDashboard() {
       if (res.ok) {
         const data = await res.json();
         setAllProperties(data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchCharges = async () => {
+    try {
+      const res = await fetch("/api/admin/charges", { headers: adminHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setAllCharges(data);
       }
     } catch (err) {
       console.error(err);
@@ -281,85 +285,207 @@ export default function AdminDashboard() {
   };
 
   const handleApprove = async (id: string) => {
+    setProcessingIds(prev => new Set(prev).add(id));
     try {
       const res = await fetch(`/api/admin/cleaners/${id}/approve`, {
         method: "POST",
         headers: adminHeaders
       });
       if (res.ok) {
-        fetchCleaners();
-        fetchAllUsers();
-        fetchApplicationHistory();
+        setSuccessIds(prev => new Set(prev).add(id));
+        await Promise.all([
+          fetchCleaners(),
+          fetchAllUsers(),
+          fetchApplicationHistory()
+        ]);
+        // Keep success state for 3 seconds
+        setTimeout(() => {
+          setSuccessIds(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        }, 3000);
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const handleMarkChargePaid = async (chargeId: string) => {
+    setProcessingIds(prev => new Set(prev).add(chargeId));
+    try {
+      const res = await fetch(`/api/admin/charges/${chargeId}/pay`, {
+        method: "POST",
+        headers: adminHeaders
+      });
+      if (res.ok) {
+        fetchCharges();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(chargeId);
+        return next;
+      });
+    }
+  };
+
+  const handleSendInvoice = async (jobId: string) => {
+    setProcessingIds(prev => new Set(prev).add(jobId));
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/invoice`, {
+        method: "POST",
+        headers: adminHeaders
+      });
+      if (res.ok) {
+        await fetchAllJobs();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
     }
   };
 
   const handleForceApprove = async (id: string) => {
+    setProcessingIds(prev => new Set(prev).add(id));
     try {
       const res = await fetch(`/api/admin/users/${id}/approve`, {
         method: "POST",
         headers: adminHeaders
       });
       if (res.ok) {
-        fetchCleaners();
-        fetchAllUsers();
-        fetchApplicationHistory();
+        setSuccessIds(prev => new Set(prev).add(id));
+        await Promise.all([
+          fetchCleaners(),
+          fetchAllUsers(),
+          fetchApplicationHistory()
+        ]);
+        setTimeout(() => {
+          setSuccessIds(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        }, 3000);
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
   const handleRejectCleaner = async (id: string) => {
-    if (!window.confirm("Are you sure you want to reject this application? The data will be kept for your records.")) return;
+    setProcessingIds(prev => new Set(prev).add(id));
     try {
       const res = await fetch(`/api/admin/cleaners/${id}/reject`, {
         method: "POST",
         headers: adminHeaders
       });
       if (res.ok) {
-        fetchCleaners();
-        fetchApplicationHistory();
+        await Promise.all([
+          fetchCleaners(),
+          fetchApplicationHistory()
+        ]);
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
   const handleRestoreUser = async (id: string) => {
+    setProcessingIds(prev => new Set(prev).add(id));
     try {
       const res = await fetch(`/api/admin/users/${id}/restore`, {
         method: "POST",
         headers: adminHeaders
       });
       if (res.ok) {
-        fetchCleaners();
-        fetchAllUsers();
-        fetchApplicationHistory();
+        await Promise.all([
+          fetchCleaners(),
+          fetchAllUsers(),
+          fetchApplicationHistory()
+        ]);
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const handleUpdateQuote = async (id: string) => {
+    try {
+      const res = await fetch(`/api/jobs/${id}/update-quote`, {
+        method: "PATCH",
+        headers: { ...adminHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ calculated_base_price: tempPrice })
+      });
+      if (res.ok) {
+        await fetchAllJobs();
+        setEditingPriceId(null);
+      } else {
+        const errorData = await res.json();
+        alert(`Failed to update price: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error("[Admin] Error updating price:", err);
     }
   };
 
   const handleApproveQuote = async (id: string) => {
+    const price = jobPrices[id];
+    if (!price) {
+      alert("Please enter a price");
+      return;
+    }
     try {
       const res = await fetch(`/api/admin/jobs/${id}/approve-quote`, {
         method: "POST",
-        headers: adminHeaders
+        headers: { ...adminHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ price })
       });
       if (res.ok) {
         fetchAllJobs();
+      } else {
+        const errorData = await res.json();
+        console.error("[Admin] Failed to approve quote:", errorData);
+        alert(`Failed to approve quote: ${errorData.error || 'Unknown error'}`);
       }
     } catch (err) {
-      console.error(err);
+      console.error("[Admin] Error approving quote:", err);
     }
   };
 
   const handleRejectQuote = async (id: string) => {
-    if (!window.confirm("Are you sure you want to reject this quote request?")) return;
     try {
       const res = await fetch(`/api/admin/jobs/${id}/reject-quote`, {
         method: "POST",
@@ -367,9 +493,13 @@ export default function AdminDashboard() {
       });
       if (res.ok) {
         fetchAllJobs();
+      } else {
+        const errorData = await res.json();
+        console.error("[Admin] Failed to reject quote:", errorData);
+        alert(`Failed to reject quote: ${errorData.error || 'Unknown error'}`);
       }
     } catch (err) {
-      console.error(err);
+      console.error("[Admin] Error rejecting quote:", err);
     }
   };
 
@@ -387,60 +517,106 @@ export default function AdminDashboard() {
     }
   };
 
-  const [cmsStatus, setCmsStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [sanityData, setSanityData] = useState<any[]>([]);
-  const [loadingSanity, setLoadingSanity] = useState(false);
-
-  const fetchSanityData = async () => {
-    setLoadingSanity(true);
+  const handleMarkPaymentReceived = async (id: string) => {
     try {
-      const data = await fetchCmsContent('cleaner');
-      setSanityData(data);
-    } catch (err) {
-      console.error("Error fetching Sanity data:", err);
-    } finally {
-      setLoadingSanity(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'content') {
-      fetchSanityData();
-    }
-  }, [activeTab]);
-  const [cmsError, setCmsError] = useState<string | null>(null);
-  const [deletingSanityId, setDeletingSanityId] = useState<string | null>(null);
-
-  const handleDeleteSanityEntry = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}" from Sanity?`)) return;
-    
-    setDeletingSanityId(id);
-    try {
-      await deleteCmsEntry(id);
-      fetchSanityData();
-    } catch (err) {
-      console.error("Error deleting Sanity entry:", err);
-      alert("Failed to delete from Sanity.");
-    } finally {
-      setDeletingSanityId(null);
-    }
-  };
-
-  const testCmsConnection = async () => {
-    setCmsStatus('testing');
-    setCmsError(null);
-    try {
-      const result = await fetchCmsContent('testimonial');
-      if (result) {
-        setCmsStatus('success');
+      const res = await fetch(`/api/jobs/${id}/mark-paid`, {
+        method: "POST",
+        headers: adminHeaders
+      });
+      if (res.ok) {
+        fetchAllJobs();
       } else {
-        throw new Error('No response from Sanity');
+        alert("Failed to mark payment as received.");
       }
-    } catch (err: any) {
-      setCmsStatus('error');
-      setCmsError(err.message || 'Connection failed');
+    } catch (err) {
+      console.error(err);
+      alert("Error marking payment as received.");
     }
   };
+
+  const handleRemoveCleaner = async (id: string) => {
+    setCleanerToRemove(id);
+    setShowRemoveModal(true);
+  };
+
+  const confirmRemoveCleaner = async () => {
+    if (!cleanerToRemove) return;
+    try {
+      const res = await fetch(`/api/admin/jobs/${cleanerToRemove}/remove-cleaner`, {
+        method: "POST",
+        headers: { ...adminHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ strike: addStrike })
+      });
+      if (res.ok) {
+        fetchAllJobs();
+        setShowRemoveModal(false);
+        setCleanerToRemove(null);
+        setAddStrike(false);
+      } else {
+        alert("Failed to remove cleaner");
+      }
+    } catch (err) {
+      console.error("[Admin] Error removing cleaner:", err);
+    }
+  };
+
+  const handleUpdateJobDate = async (id: string, newDate: string) => {
+    try {
+      const res = await fetch(`/api/admin/jobs/${id}/update-date`, {
+        method: "POST",
+        headers: { ...adminHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ new_date: newDate })
+      });
+      if (res.ok) {
+        fetchAllJobs();
+        setEditingDateId(null);
+        setTempScheduledDate("");
+      } else {
+        alert("Failed to update date");
+      }
+    } catch (err) {
+      console.error("[Admin] Error updating date:", err);
+      alert("Error updating date");
+    }
+  };
+
+  const handleToggleCompleted = async (id: string) => {
+    try {
+      const res = await fetch(`/api/admin/jobs/${id}/toggle-completed`, {
+        method: "POST",
+        headers: adminHeaders
+      });
+      if (res.ok) {
+        fetchAllJobs();
+      } else {
+        alert("Failed to toggle status");
+      }
+    } catch (err) {
+      console.error("[Admin] Error toggling status:", err);
+      alert("Error toggling status");
+    }
+  };
+
+  const handleUpdateAllJobData = async (id: string) => {
+    try {
+      const res = await fetch(`/api/admin/jobs/${id}/update-all`, {
+        method: "PATCH",
+        headers: { ...adminHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(tempJobData)
+      });
+      if (res.ok) {
+        fetchAllJobs();
+        setEditingJobId(null);
+        setTempJobData({});
+      } else {
+        alert("Failed to update job");
+      }
+    } catch (err) {
+      console.error("[Admin] Error updating job:", err);
+      alert("Error updating job");
+    }
+  };
+
 
   const handleResolveFeedback = async (id: string) => {
     try {
@@ -458,8 +634,8 @@ export default function AdminDashboard() {
 
   const handleDeleteCleaner = async (id: string) => {
     const cleaner = cleaners.find(c => c.id === id);
-    if (!window.confirm(`Are you sure you want to deactivate ${cleaner?.full_name || 'this cleaner'}? The information will stay in the database but the user will no longer be able to log in.`)) return;
     
+    setProcessingIds(prev => new Set(prev).add(id));
     try {
       // 1. Delete locally (soft delete)
       const res = await fetch(`/api/users/${id}`, {
@@ -468,22 +644,19 @@ export default function AdminDashboard() {
       });
 
       if (res.ok) {
-        // 2. Try to delete from Sanity if it was synced
-        try {
-          await fetch(`/api/admin/cleaners/${cleaner?.contact_email}/sync-sanity`, {
-            method: "DELETE",
-            headers: adminHeaders
-          });
-          console.log("Deleted from Sanity successfully");
-        } catch (sanityErr) {
-          console.warn("Could not delete from Sanity:", sanityErr);
-        }
-
-        fetchCleaners();
-        fetchAllUsers();
+        await Promise.all([
+          fetchCleaners(),
+          fetchAllUsers()
+        ]);
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setProcessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -495,13 +668,13 @@ export default function AdminDashboard() {
 
   if (!user || user.role !== "admin") return null;
 
-  const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
-  const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
+  const daysInMonth = new window.Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+  const firstDayOfMonth = new window.Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
   const blanks = Array.from({ length: firstDayOfMonth }, (_, i) => i);
 
-  const prevMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
-  const nextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  const prevMonth = () => setCurrentDate(new window.Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+  const nextMonth = () => setCurrentDate(new window.Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
 
   const monthNames = [
     t('common.january'), t('common.february'), t('common.march'), t('common.april'),
@@ -670,6 +843,34 @@ export default function AdminDashboard() {
           )}
         </button>
         <button
+          onClick={() => setActiveTab("invoices")}
+          className={`py-3 px-4 font-medium text-sm flex items-center gap-2 whitespace-nowrap transition-colors relative ${
+            activeTab === "invoices"
+              ? "border-b-2 border-emerald-600 text-emerald-600"
+              : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          <DollarSign className="w-4 h-4" />
+          Invoices
+          {allJobs.some(j => j.job_lifecycle_status === 'pending_invoice') && (
+            <span className="absolute top-2 right-0 flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab("history")}
+          className={`py-3 px-4 font-medium text-sm flex items-center gap-2 whitespace-nowrap transition-colors relative ${
+            activeTab === "history"
+              ? "border-b-2 border-emerald-600 text-emerald-600"
+              : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          <History className="w-4 h-4" />
+          History
+        </button>
+        <button
           onClick={() => setActiveTab("quotes")}
           className={`py-3 px-4 font-medium text-sm flex items-center gap-2 whitespace-nowrap transition-colors relative ${
             activeTab === "quotes"
@@ -702,17 +903,6 @@ export default function AdminDashboard() {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
             </span>
           )}
-        </button>
-        <button
-          onClick={() => setActiveTab("content")}
-          className={`py-3 px-4 font-medium text-sm flex items-center gap-2 whitespace-nowrap transition-colors relative ${
-            activeTab === "content"
-              ? "border-b-2 border-emerald-600 text-emerald-600"
-              : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
-          }`}
-        >
-          <Layout className="w-4 h-4" />
-          {t('admin.tabs.content') || "Content (CMS)"}
         </button>
       </div>
 
@@ -751,9 +941,6 @@ export default function AdminDashboard() {
                           <div>
                             <p className="text-sm font-bold text-slate-900">
                               {cleaner.full_name || cleaner.contact_email}
-                              {cleaner.is_from_sanity && (
-                                <span className="ml-2 px-1.5 py-0.5 bg-indigo-100 text-indigo-600 text-[10px] rounded-md font-medium">Sanity</span>
-                              )}
                             </p>
                             <p className="text-xs text-slate-500">{cleaner.contact_email}</p>
                           </div>
@@ -814,12 +1001,12 @@ export default function AdminDashboard() {
                       <div key={`blank-${blank}`} className="aspect-square rounded-xl bg-slate-50/50 border border-slate-100"></div>
                     ))}
                     {days.map(day => {
-                      const dateStr = new Date(currentDate.getFullYear(), currentDate.getMonth(), day).toISOString().split('T')[0];
+                      const dateStr = new window.Date(currentDate.getFullYear(), currentDate.getMonth(), day).toISOString().split('T')[0];
                       const dayJobs = allJobs.filter(j => 
                         (j.specific_date && j.specific_date.startsWith(dateStr)) || 
                         (!j.specific_date && j.scheduled_date && j.scheduled_date.startsWith(dateStr))
                       );
-                      const isToday = new Date().toISOString().split('T')[0] === dateStr;
+                      const isToday = new window.Date().toISOString().split('T')[0] === dateStr;
                       
                       return (
                         <div key={day} className={`aspect-square rounded-xl border p-2 flex flex-col ${isToday ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200'}`}>
@@ -833,7 +1020,7 @@ export default function AdminDashboard() {
                                 job.job_lifecycle_status === 'claimed_scheduled' ? 'bg-blue-50 text-blue-700 border-blue-200' :
                                 'bg-amber-50 text-amber-700 border-amber-200'
                               }`}>
-                                <div className="font-bold mb-0.5">{job.address || t('admin.no_address')}</div>
+                                <div className="font-bold mb-0.5">{job.address || t('admin.no_address')} {job.subscription_id && <RefreshCw className="w-2 h-2 inline ml-1" />}</div>
                                 <div>{job.cleaner_email ? (job.cleaner_full_name || job.cleaner_email.split('@')[0]) : t('admin.no_one_assigned')}</div>
                               </div>
                             ))}
@@ -855,12 +1042,35 @@ export default function AdminDashboard() {
                   {t('admin.all_bookings')}
                 </h2>
                 <p className="text-sm text-slate-500 mt-1">{t('admin.what_to_do')}</p>
+                <div className="flex gap-2 mt-4">
+                  {(['all', 'past', 'future'] as const).map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setJobFilterTab(tab)}
+                      className={`px-3 py-1 text-xs font-bold rounded-full capitalize ${jobFilterTab === tab ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="p-6 space-y-4 max-h-[600px] overflow-y-auto">
-                {allJobs.length === 0 ? (
+                {allJobs.filter(job => {
+                  const jobDate = new Date(job.scheduled_date);
+                  const now = new Date();
+                  if (jobFilterTab === 'past') return jobDate < now;
+                  if (jobFilterTab === 'future') return jobDate >= now;
+                  return true;
+                }).length === 0 ? (
                   <div className="text-center py-8 text-slate-500">{t('admin.no_bookings')}</div>
                 ) : (
-                  allJobs.map(job => (
+                  allJobs.filter(job => {
+                    const jobDate = new Date(job.scheduled_date);
+                    const now = new Date();
+                    if (jobFilterTab === 'past') return jobDate < now;
+                    if (jobFilterTab === 'future') return jobDate >= now;
+                    return true;
+                  }).map(job => (
                     <div key={job.id} className="p-4 rounded-xl border border-slate-200 bg-white shadow-sm">
                       <div className="flex justify-between items-start mb-2">
                         <div className="font-bold text-slate-900">
@@ -870,21 +1080,106 @@ export default function AdminDashboard() {
                               ({t('cleaner_dashboard.payout')}: ${Number(job.cleaner_payout).toFixed(2)})
                             </span>
                           )}
+                          <button
+                            onClick={() => {
+                              setEditingJobId(job.id);
+                              setTempJobData({
+                                final_transaction_price: job.final_transaction_price,
+                                final_cleaner_payout: job.final_cleaner_payout,
+                                custom_bonus: job.custom_bonus
+                              });
+                            }}
+                            className="ml-2 text-xs text-indigo-600 hover:underline"
+                          >
+                            Modify
+                          </button>
+                          {editingJobId === job.id && (
+                            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                              <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-sm">
+                                <h3 className="font-bold text-lg mb-4">Modify Booking</h3>
+                                <div className="space-y-4">
+                                  <div>
+                                    <label className="block text-xs font-medium text-slate-700">Total Price</label>
+                                    <input type="number" value={tempJobData.final_transaction_price || 0} onChange={(e) => setTempJobData({...tempJobData, final_transaction_price: parseFloat(e.target.value)})} className="w-full border rounded p-2" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-medium text-slate-700">Cleaner Payout</label>
+                                    <input type="number" value={tempJobData.final_cleaner_payout || 0} onChange={(e) => setTempJobData({...tempJobData, final_cleaner_payout: parseFloat(e.target.value)})} className="w-full border rounded p-2" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-medium text-slate-700">5-Star Bonus</label>
+                                    <input type="number" value={tempJobData.custom_bonus || 0} onChange={(e) => setTempJobData({...tempJobData, custom_bonus: parseFloat(e.target.value)})} className="w-full border rounded p-2" />
+                                  </div>
+                                </div>
+                                <div className="flex justify-end gap-2 mt-6">
+                                  <button onClick={() => setEditingJobId(null)} className="px-4 py-2 text-slate-600">Cancel</button>
+                                  <button onClick={() => handleUpdateAllJobData(job.id)} className="px-4 py-2 bg-indigo-600 text-white rounded">Save</button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <div className="text-xs font-medium px-2 py-1 rounded-full bg-slate-100 text-slate-600">
-                          {job.specific_date ? (
-                            <span className="font-bold text-emerald-600">
-                              {t('admin.confirmed')} {formatDate(new Date(job.specific_date))}
-                            </span>
+                          {editingDateId === job.id ? (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="datetime-local"
+                                value={tempScheduledDate}
+                                onChange={(e) => setTempScheduledDate(e.target.value)}
+                                className="text-xs border rounded p-1"
+                              />
+                              <button onClick={() => handleUpdateJobDate(job.id, tempScheduledDate)} className="text-emerald-600 font-bold">Save</button>
+                              <button onClick={() => setEditingDateId(null)} className="text-slate-500">Cancel</button>
+                            </div>
                           ) : (
                             <>
-                              {formatDate(new Date(job.scheduled_date))}
-                              {job.scheduled_end_date && (
+                              {job.specific_date ? (
+                                <span className="font-bold text-emerald-600">
+                                  {t('admin.confirmed')} {formatDateTime(new window.Date(job.specific_date), { dateStyle: 'short', timeStyle: 'short' })}
+                                </span>
+                              ) : (
                                 <>
-                                  <span className="mx-1">-</span>
-                                  {formatDate(new Date(job.scheduled_end_date))}
+                                  {formatDateTime(new window.Date(job.scheduled_date), { dateStyle: 'short', timeStyle: 'short' })}
+                                  {job.scheduled_end_date && (
+                                    <>
+                                      <span className="mx-1">-</span>
+                                      {formatDateTime(new window.Date(job.scheduled_end_date), { dateStyle: 'short', timeStyle: 'short' })}
+                                    </>
+                                  )}
+                                  <button
+                                    onClick={() => {
+                                      setEditingDateId(job.id);
+                                      setTempScheduledDate(job.scheduled_date.slice(0, 16));
+                                    }}
+                                    className="ml-2 text-indigo-600 hover:underline"
+                                  >
+                                    Edit
+                                  </button>
+                                  {(() => {
+                                    try {
+                                      const instructions = JSON.parse(job.special_instructions);
+                                      if (instructions && instructions.original_scheduled_date) {
+                                        return (
+                                          <div className="text-[10px] text-slate-400 mt-1">
+                                            Original: {formatDateTime(new window.Date(instructions.original_scheduled_date), { dateStyle: 'short', timeStyle: 'short' })}
+                                          </div>
+                                        );
+                                      }
+                                    } catch (e) {
+                                      return null;
+                                    }
+                                    return null;
+                                  })()}
                                 </>
                               )}
+                              <div className="mt-2">
+                                <button
+                                  onClick={() => handleToggleCompleted(job.id)}
+                                  className={`text-xs font-bold px-2 py-1 rounded ${job.job_lifecycle_status === 'completed' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}
+                                >
+                                  {job.job_lifecycle_status === 'completed' ? 'Mark as Not Done' : 'Mark as Done'}
+                                </button>
+                              </div>
                             </>
                           )}
                         </div>
@@ -905,8 +1200,18 @@ export default function AdminDashboard() {
                       <div className="text-sm text-slate-600 mb-2">
                         <span className="font-medium text-slate-900">{t('admin.address')}</span> {job.address || 'N/A'}
                       </div>
-                      <div className="text-sm text-slate-600 mb-3">
-                        <span className="font-medium text-slate-900">{t('admin.cleaner')}</span> {job.cleaner_email || <span className="text-amber-600 italic">{t('admin.no_cleaner_assigned')}</span>}
+                      <div className="text-sm text-slate-600 mb-3 flex items-center justify-between">
+                        <div>
+                          <span className="font-medium text-slate-900">{t('admin.cleaner')}</span> {job.cleaner_email || <span className="text-amber-600 italic">{t('admin.no_cleaner_assigned')}</span>}
+                        </div>
+                        {job.cleaner_id && (
+                          <button
+                            onClick={() => handleRemoveCleaner(job.id)}
+                            className="text-xs font-bold text-red-600 hover:text-red-700 hover:underline"
+                          >
+                            {t('admin.remove_cleaner') || "Remove"}
+                          </button>
+                        )}
                       </div>
                       <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
                         <div className="flex items-center gap-2">
@@ -988,9 +1293,6 @@ export default function AdminDashboard() {
                             <div>
                               <h3 className="text-lg font-bold text-slate-900">
                                 {cleaner.full_name || cleaner.contact_email}
-                                {cleaner.is_from_sanity && (
-                                  <span className="ml-2 px-2 py-0.5 bg-indigo-100 text-indigo-600 text-xs rounded-full font-medium">Sanity</span>
-                                )}
                               </h3>
                               <p className="text-slate-500">{cleaner.contact_email}</p>
                               {cleaner.phone_number && <p className="text-sm text-slate-400 mt-1">{cleaner.phone_number}</p>}
@@ -1007,7 +1309,7 @@ export default function AdminDashboard() {
                           <div className="flex flex-wrap gap-4 text-sm">
                             <div className="flex items-center gap-1.5 text-slate-500">
                               <Calendar className="w-4 h-4" />
-                              {t('admin.applied_on') || "Applied on"}: {cleaner.created_at ? formatDate(new Date(cleaner.created_at)) : "N/A"}
+                              {t('admin.applied_on') || "Applied on"}: {cleaner.created_at ? formatDate(new window.Date(cleaner.created_at)) : "N/A"}
                             </div>
                             {cleaner.cv && (
                               <a 
@@ -1023,35 +1325,40 @@ export default function AdminDashboard() {
                         </div>
 
                         <div className="flex flex-row md:flex-col gap-3 justify-end">
-                          <button
-                            onClick={() => handleApprove(cleaner.id)}
-                            className="flex-1 md:flex-none px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-100 flex items-center justify-center gap-2"
-                          >
-                            <CheckCircle className="w-5 h-5" />
-                            {t('admin.approve_application') || "Approve Application"}
-                          </button>
-                          <button
-                            onClick={() => handleRejectCleaner(cleaner.id)}
-                            className="flex-1 md:flex-none px-6 py-3 bg-white text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-50 transition-all"
-                          >
-                            {t('admin.reject') || "Reject"}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteCleaner(cleaner.id)}
-                            className="flex-1 md:flex-none px-6 py-3 bg-white text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-50 transition-all"
-                          >
-                            Deactivate
-                          </button>
-
-                          {!cleaner.is_from_sanity && (
-                            <button
-                              onClick={() => handleSyncToSanity(cleaner)}
-                              disabled={syncing === cleaner.id}
-                              className="flex-1 md:flex-none px-6 py-3 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl font-bold hover:bg-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                            >
-                              <RefreshCw className={`w-5 h-5 ${syncing === cleaner.id ? 'animate-spin' : ''}`} />
-                              {syncing === cleaner.id ? "Syncing..." : "Sync to Sanity"}
-                            </button>
+                          {successIds.has(cleaner.id) ? (
+                            <div className="flex-1 md:flex-none px-6 py-3 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl font-bold flex items-center justify-center gap-2 animate-in fade-in zoom-in duration-300">
+                              <ShieldCheck className="w-5 h-5" />
+                              {t('admin.approved') || "Approved"}
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleApprove(cleaner.id)}
+                                disabled={processingIds.has(cleaner.id)}
+                                className={`flex-1 md:flex-none px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-100 flex items-center justify-center gap-2 ${processingIds.has(cleaner.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              >
+                                {processingIds.has(cleaner.id) ? (
+                                  <RefreshCw className="w-5 h-5 animate-spin" />
+                                ) : (
+                                  <CheckCircle className="w-5 h-5" />
+                                )}
+                                {t('admin.approve_application') || "Approve Application"}
+                              </button>
+                              <button
+                                onClick={() => handleRejectCleaner(cleaner.id)}
+                                disabled={processingIds.has(cleaner.id)}
+                                className="flex-1 md:flex-none px-6 py-3 bg-white text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-50 transition-all disabled:opacity-50"
+                              >
+                                {t('admin.reject') || "Reject"}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteCleaner(cleaner.id)}
+                                disabled={processingIds.has(cleaner.id)}
+                                className="flex-1 md:flex-none px-6 py-3 bg-white text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-50 transition-all disabled:opacity-50"
+                              >
+                                Deactivate
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -1094,7 +1401,7 @@ export default function AdminDashboard() {
                             <div className="text-sm text-slate-600">{app.contact_email}</div>
                             {app.phone_number && <div className="text-xs text-slate-400">{app.phone_number}</div>}
                           </td>
-                          <td className="py-4 px-4 text-slate-500">{formatDate(new Date(app.created_at))}</td>
+                          <td className="py-4 px-4 text-slate-500">{formatDate(new window.Date(app.created_at))}</td>
                           <td className="py-4 px-4">
                             {app.is_deleted ? (
                               <span className="text-xs font-bold px-2 py-1 rounded-full bg-slate-200 text-slate-600">
@@ -1155,12 +1462,6 @@ export default function AdminDashboard() {
                             <div>
                               <div className="font-bold text-slate-900 text-lg flex items-center gap-2">
                                 {cleaner.full_name || cleaner.contact_email}
-                                {cleaner.is_from_sanity && (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-semibold border border-emerald-200">
-                                    <ShieldCheck className="w-3 h-3" />
-                                    Safe & Stored
-                                  </span>
-                                )}
                               </div>
                               <div className="text-sm text-slate-500">{cleaner.contact_email}</div>
                               {cleaner.phone_number && (
@@ -1205,32 +1506,36 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                         <div className="flex flex-col gap-2">
-                          {!cleaner.is_approved && (
-                            <button
-                              onClick={() => handleApprove(cleaner.id)}
-                              className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 whitespace-nowrap self-start"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              {t('admin.approve')}
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDeleteCleaner(cleaner.id)}
-                            className="px-4 py-2 bg-white text-red-600 border border-red-100 rounded-lg font-medium hover:bg-red-50 transition-colors flex items-center gap-2 whitespace-nowrap self-start"
-                          >
-                            <X className="w-4 h-4" />
-                            Deactivate
-                          </button>
-
-                          {!cleaner.is_from_sanity && (
-                            <button
-                              onClick={() => handleSyncToSanity(cleaner)}
-                              disabled={syncing === cleaner.id}
-                              className="px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg font-medium hover:bg-indigo-100 transition-colors flex items-center gap-2 whitespace-nowrap self-start disabled:opacity-50"
-                            >
-                              <RefreshCw className={`w-4 h-4 ${syncing === cleaner.id ? 'animate-spin' : ''}`} />
-                              {syncing === cleaner.id ? "Syncing..." : "Sync to Sanity"}
-                            </button>
+                          {successIds.has(cleaner.id) ? (
+                            <div className="px-4 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg font-medium flex items-center gap-2 whitespace-nowrap self-start">
+                              <ShieldCheck className="w-4 h-4" />
+                              {t('admin.approved')}
+                            </div>
+                          ) : (
+                            <>
+                              {!cleaner.is_approved && (
+                                <button
+                                  onClick={() => handleApprove(cleaner.id)}
+                                  disabled={processingIds.has(cleaner.id)}
+                                  className={`px-4 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 whitespace-nowrap self-start ${processingIds.has(cleaner.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                  {processingIds.has(cleaner.id) ? (
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <CheckCircle className="w-4 h-4" />
+                                  )}
+                                  {t('admin.approve')}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDeleteCleaner(cleaner.id)}
+                                disabled={processingIds.has(cleaner.id)}
+                                className="px-4 py-2 bg-white text-red-600 border border-red-100 rounded-lg font-medium hover:bg-red-50 transition-colors flex items-center gap-2 whitespace-nowrap self-start disabled:opacity-50"
+                              >
+                                <X className="w-4 h-4" />
+                                Deactivate
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -1301,19 +1606,34 @@ export default function AdminDashboard() {
                             {u.is_deleted ? (
                               <button
                                 onClick={() => handleRestoreUser(u.id)}
-                                className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 transition-all"
+                                disabled={processingIds.has(u.id)}
+                                className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 transition-all disabled:opacity-50"
                               >
                                 Restore
                               </button>
                             ) : (
-                              u.is_approved !== 1 && (
-                                <button
-                                  onClick={() => handleForceApprove(u.id)}
-                                  className="text-xs font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100 transition-all"
-                                >
-                                  Force Approve
-                                </button>
-                              )
+                              <>
+                                {successIds.has(u.id) ? (
+                                  <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100 flex items-center gap-1">
+                                    <ShieldCheck className="w-3 h-3" />
+                                    Approved
+                                  </span>
+                                ) : (
+                                  u.is_approved !== 1 && (
+                                    <button
+                                      onClick={() => handleForceApprove(u.id)}
+                                      disabled={processingIds.has(u.id)}
+                                      className={`text-xs font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100 transition-all ${processingIds.has(u.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    >
+                                      {processingIds.has(u.id) ? (
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        "Force Approve"
+                                      )}
+                                    </button>
+                                  )
+                                )}
+                              </>
                             )}
                           </div>
                         </td>
@@ -1356,7 +1676,7 @@ export default function AdminDashboard() {
                           ))}
                         </div>
                         <div className="text-xs text-slate-500">
-                          {formatDate(new Date(rating.scheduled_date))}
+                          {formatDate(new window.Date(rating.scheduled_date))}
                         </div>
                       </div>
                       
@@ -1421,7 +1741,7 @@ export default function AdminDashboard() {
                   <div key={prop.id} className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-shadow">
                     <div className="flex items-center gap-2 text-slate-900 font-bold mb-3">
                       <MapPin className="w-4 h-4 text-emerald-600" />
-                      {t('admin.property_id')}#{prop.id ? prop.id.slice(0, 8) : 'N/A'}
+                      {prop.address || `${t('admin.property_id')}#${prop.id ? prop.id.slice(0, 8) : 'N/A'}`}
                       <button
                         onClick={() => {
                           setViewingNotesCustomerId(prop.owner_id);
@@ -1453,6 +1773,10 @@ export default function AdminDashboard() {
                       <div className="flex justify-between">
                         <span className="text-slate-500">{t('admin.windows')}:</span>
                         <span className="font-medium text-slate-900">{prop.windows}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Floors:</span>
+                        <span className="font-medium text-slate-900">{prop.floors || 1}</span>
                       </div>
                     </div>
                   </div>
@@ -1495,20 +1819,79 @@ export default function AdminDashboard() {
                           <div className="flex items-center gap-2 mb-1">
                             <span className="font-bold text-slate-900 text-lg">${(job.final_transaction_price || 0).toFixed(2)}</span>
                             <span className="text-xs font-medium px-2 py-1 rounded-full bg-slate-100 text-slate-600">
-                              {formatDate(new Date(job.scheduled_date))}
+                              {formatDate(new window.Date(job.scheduled_date))}
                             </span>
                           </div>
                           <div className="text-sm text-slate-600">
-                            <span className="font-medium text-slate-900">{t('admin.homeowner')}:</span> {job.homeowner_name || job.homeowner_email}
-                          </div>
-                          <div className="text-sm text-slate-600">
-                            <span className="font-medium text-slate-900">{t('admin.address')}:</span> {job.address || 'N/A'}
+                            {(() => {
+                              const basePrice = parseFloat(job.calculated_base_price || 0);
+                              const addonPrice = parseFloat(job.final_addon_price || 0);
+                              const customerTotal = basePrice + addonPrice;
+                              const baseCut = customerTotal * 0.45;
+                              const ratingBonus = job.rating === 5 ? 15.00 : 0.00;
+                              const totalPayout = baseCut + ratingBonus;
+                              return `Cleaner Cut: $${baseCut.toFixed(2)} | 5-Star Bonus: $${ratingBonus.toFixed(2)} | Total Payout: $${totalPayout.toFixed(2)}`;
+                            })()}
                           </div>
                         </div>
                       </div>
-                      <div className="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg font-bold text-xs uppercase tracking-wider">
-                        {t('admin.waiting_for_customer') || "Waiting for Customer"}
+                      <button
+                        onClick={() => handleMarkPaymentReceived(job.id)}
+                        className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold uppercase tracking-wider"
+                      >
+                        Mark as Received
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Subscription Adjustment Fees */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-200 bg-indigo-50">
+              <h2 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-indigo-600" />
+                Subscription Adjustment Fees
+              </h2>
+              <p className="text-sm text-indigo-700 mt-1">Early cancellation fees logged for recurring plans</p>
+            </div>
+            <div className="p-6">
+              {allCharges.filter(c => c.status === 'pending').length === 0 ? (
+                <div className="text-center py-12 text-slate-500">
+                  No pending adjustment fees.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {allCharges.filter(c => c.status === 'pending').map(charge => (
+                    <div key={charge.id} className="p-4 rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100 shrink-0">
+                          <DollarSign className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-bold text-slate-900 text-lg">${(charge.amount || 0).toFixed(2)}</span>
+                            <span className="text-xs font-medium px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                              {formatDate(new window.Date(charge.created_at))}
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            <span className="font-medium text-slate-900">Customer:</span> {charge.users?.full_name || charge.users?.contact_email}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-1 italic">
+                            {charge.reason}
+                          </div>
+                        </div>
                       </div>
+                      <button
+                        onClick={() => handleMarkChargePaid(charge.id)}
+                        disabled={processingIds.has(charge.id)}
+                        className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        {processingIds.has(charge.id) ? "Processing..." : "Mark as Paid"}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1544,9 +1927,21 @@ export default function AdminDashboard() {
                         </div>
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-slate-900 text-lg">${job.cleaner_payout ? job.cleaner_payout.toFixed(2) : '0.00'}</span>
+                            <span className="font-bold text-slate-900 text-lg">
+                              ${(() => {
+                                if (job.final_cleaner_payout != null) {
+                                  return parseFloat(job.final_cleaner_payout).toFixed(2);
+                                }
+                                const basePrice = parseFloat(job.calculated_base_price || 0);
+                                const addonPrice = parseFloat(job.final_addon_price || 0);
+                                const customerTotal = basePrice + addonPrice;
+                                const baseCut = customerTotal * 0.45;
+                                const ratingBonus = job.rating === 5 ? 15.00 : 0.00;
+                                return (baseCut + ratingBonus + (job.custom_bonus || 0)).toFixed(2);
+                              })()}
+                            </span>
                             <span className="text-xs font-medium px-2 py-1 rounded-full bg-slate-100 text-slate-600">
-                              {formatDate(new Date(job.scheduled_date))}
+                              {formatDate(new window.Date(job.scheduled_date))}
                             </span>
                           </div>
                           <div className="text-sm text-slate-600">
@@ -1557,17 +1952,141 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handlePayCleaner(job.id)}
-                        className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 whitespace-nowrap self-start sm:self-auto"
-                      >
-                        <CheckCircle className="w-4 h-4" />
-                        {t('admin.mark_as_paid')}
-                      </button>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                          onClick={() => setSelectedJobForPayout(job)}
+                          className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg font-medium hover:bg-blue-200 transition-colors flex items-center gap-2 whitespace-nowrap"
+                        >
+                          Modify Payout
+                        </button>
+                        <button
+                          onClick={() => handlePayCleaner(job.id)}
+                          className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 whitespace-nowrap"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          {t('admin.mark_as_paid')}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "invoices" && (
+        <div className="space-y-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-200 bg-emerald-50">
+              <h2 className="text-xl font-bold text-emerald-900 flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-emerald-600" />
+                Pending Invoices
+              </h2>
+              <p className="text-sm text-emerald-700 mt-1">Jobs awaiting final review and invoicing</p>
+            </div>
+            <div className="divide-y divide-slate-200">
+              {allJobs.filter(j => j.job_lifecycle_status === 'pending_invoice').map(job => {
+                const basePrice = job.calculated_base_price || 0;
+                const addonPrice = job.final_addon_price || 0;
+                const total = basePrice + addonPrice;
+
+                return (
+                  <div key={job.id} className="p-6 flex items-center justify-between">
+                    <div>
+                      <h3 className="font-semibold text-slate-900">{job.property_address}</h3>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-slate-600">Base Quote:</p>
+                        {editingPriceId === job.id ? (
+                          <input
+                            type="number"
+                            value={tempPrice}
+                            onChange={(e) => setTempPrice(parseFloat(e.target.value))}
+                            className="w-20 px-2 py-1 border rounded"
+                          />
+                        ) : (
+                          <span className="font-medium">${basePrice.toFixed(2)}</span>
+                        )}
+                        {editingPriceId === job.id ? (
+                          <>
+                            <button onClick={() => handleUpdateQuote(job.id)} className="text-xs text-emerald-600 font-bold">Save</button>
+                            <button onClick={() => setEditingPriceId(null)} className="text-xs text-slate-500">Cancel</button>
+                          </>
+                        ) : (
+                          <button onClick={() => { setEditingPriceId(job.id); setTempPrice(basePrice); }} className="text-xs text-indigo-600 font-bold">Edit</button>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-600">Add-ons: ${addonPrice.toFixed(2)}</p>
+                      <p className="text-base font-bold text-slate-900 mt-2">
+                        Invoice Total: ${total.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setSelectedJobForPhotos(job)}
+                        className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+                      >
+                        View Photos
+                      </button>
+                      <button
+                        onClick={() => handleSendInvoice(job.id)}
+                        className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                      >
+                        Send Final Invoice
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "history" && (
+        <div className="space-y-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-200 bg-slate-50">
+              <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                <History className="w-5 h-5 text-slate-600" />
+                Past Cleanings
+              </h2>
+              <p className="text-sm text-slate-600 mt-1">Review details and photos of completed jobs</p>
+            </div>
+            <div className="divide-y divide-slate-200">
+              {allJobs.filter(j => j.job_lifecycle_status === 'completed').map(job => (
+                <div key={job.id} className="p-6 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold text-slate-900">{job.property_address}</h3>
+                    <p className="text-sm text-slate-600">Date: {formatDate(new window.Date(job.scheduled_date))}</p>
+                    <p className="text-sm text-slate-600">Cleaner: {job.cleaner_name}</p>
+                    <p className="text-sm text-slate-600">Homeowner: {job.homeowner_name}</p>
+                    <p className="text-sm text-slate-600">Price: ${job.final_transaction_price?.toFixed(2)}</p>
+                    <p className="text-sm text-slate-600">Rating: {job.rating || 'N/A'}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setSelectedJobForPhotos(job)}
+                      className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+                    >
+                      View Photos
+                    </button>
+                    <button
+                      onClick={() => setSelectedJobForBonus(job)}
+                      className="px-4 py-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition-colors"
+                    >
+                      Add Bonus
+                    </button>
+                    <button
+                      onClick={() => setSelectedJobForPayout(job)}
+                      className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
+                    >
+                      Modify Payout
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -1595,7 +2114,16 @@ export default function AdminDashboard() {
                       <div className="flex justify-between items-start mb-4">
                         <div>
                           <div className="text-lg font-bold text-slate-900">${(job.final_transaction_price || 0).toFixed(2)}</div>
-                          <div className="text-xs text-slate-500">{formatDate(new Date(job.scheduled_date))}</div>
+                          <div className="text-xs text-slate-500">{formatDate(new window.Date(job.scheduled_date))}</div>
+                          <div className="mt-2">
+                            <label className="text-xs font-bold text-slate-700">Price:</label>
+                            <input
+                              type="number"
+                              className="w-20 px-2 py-1 rounded-lg border border-slate-300 text-sm ml-2"
+                              value={jobPrices[job.id] || job.final_transaction_price || ''}
+                              onChange={(e) => setJobPrices(prev => ({ ...prev, [job.id]: parseFloat(e.target.value) }))}
+                            />
+                          </div>
                         </div>
                         <div className="flex gap-2">
                           <button
@@ -1628,7 +2156,33 @@ export default function AdminDashboard() {
                       </div>
                       {job.special_instructions && (
                         <div className="mt-4 p-3 bg-white rounded-lg border border-amber-100 text-xs text-slate-600 italic">
-                          "{job.special_instructions}"
+                          {(() => {
+                            try {
+                              const parsed = JSON.parse(job.special_instructions);
+                              const addonMap: Record<string, string> = {
+                                'interior_windows': 'Interior Windows',
+                                'inside_oven': 'Inside Oven',
+                                'inside_fridge': 'Inside Fridge',
+                                'laundry_folding': 'Load of Laundry',
+                                'finished_basement': 'Finished Basement'
+                              };
+                              return (
+                                <div>
+                                  {parsed.instructions && <p>{parsed.instructions}</p>}
+                                  {(parsed.selected_addons && parsed.selected_addons.length > 0) && (
+                                    <div className="mt-1">
+                                      <p className="font-bold">Extras:</p>
+                                      {parsed.selected_addons.map((id: string, index: number) => (
+                                        <p key={`${id}-${index}`}>{addonMap[id] || id}</p>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            } catch (e) {
+                              return <p>"{job.special_instructions}"</p>;
+                            }
+                          })()}
                         </div>
                       )}
                     </div>
@@ -1665,7 +2219,7 @@ export default function AdminDashboard() {
                     <tbody>
                       {allJobs
                         .filter(j => j.job_lifecycle_status !== 'pending_quote')
-                        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                        .sort((a, b) => new window.Date(b.created_at).getTime() - new window.Date(a.created_at).getTime())
                         .map(job => (
                         <tr key={job.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                           <td className="py-4 px-4">
@@ -1673,7 +2227,7 @@ export default function AdminDashboard() {
                             <div className="text-xs text-slate-500">{job.address}</div>
                           </td>
                           <td className="py-4 px-4 text-sm text-slate-600">
-                            {formatDate(new Date(job.scheduled_date))}
+                            {formatDate(new window.Date(job.scheduled_date))}
                           </td>
                           <td className="py-4 px-4 text-sm font-bold text-slate-900">
                             ${(job.final_transaction_price || 0).toFixed(2)}
@@ -1730,7 +2284,7 @@ export default function AdminDashboard() {
                               {item.status}
                             </span>
                             <span className="text-xs text-slate-400">
-                              {formatDateTime(new Date(item.created_at))}
+                              {formatDateTime(new window.Date(item.created_at))}
                             </span>
                           </div>
                           <div className="text-xs font-medium text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
@@ -1790,177 +2344,6 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {activeTab === "content" && (
-        <div className="space-y-8">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-8 border-b border-slate-200 bg-indigo-50">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold text-indigo-900 flex items-center gap-3">
-                    <Layout className="w-6 h-6 text-indigo-600" />
-                    {t('admin.cms_management') || "CMS Management (Sanity.io)"}
-                  </h2>
-                  <p className="text-indigo-700 mt-2">Manage your website content through a professional third-party CMS.</p>
-                </div>
-                <a 
-                  href="https://www.sanity.io/manage" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center gap-2"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  Open Sanity Studio
-                </a>
-              </div>
-            </div>
-            <div className="p-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-6">
-                  <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200">
-                    <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-                      <ShieldCheck className="w-5 h-5 text-emerald-600" />
-                      Configuration Status
-                    </h3>
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100">
-                        <span className="text-sm text-slate-600">Project ID</span>
-                        <span className={`text-xs font-mono px-2 py-1 rounded ${import.meta.env.VITE_SANITY_PROJECT_ID ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                          {import.meta.env.VITE_SANITY_PROJECT_ID ? 'Configured' : 'Missing'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100">
-                        <span className="text-sm text-slate-600">Dataset</span>
-                        <span className="text-xs font-mono px-2 py-1 bg-blue-100 text-blue-700 rounded">
-                          {import.meta.env.VITE_SANITY_DATASET || 'production'}
-                        </span>
-                      </div>
-                      {import.meta.env.VITE_SANITY_ORGANIZATION_ID && (
-                        <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100">
-                          <span className="text-sm text-slate-600">Org ID</span>
-                          <span className="text-xs font-mono px-2 py-1 bg-slate-100 text-slate-700 rounded">
-                            {import.meta.env.VITE_SANITY_ORGANIZATION_ID}
-                          </span>
-                        </div>
-                      )}
-                      <button
-                        onClick={testCmsConnection}
-                        disabled={cmsStatus === 'testing'}
-                        className={`w-full mt-4 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-                          cmsStatus === 'success' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' :
-                          cmsStatus === 'error' ? 'bg-red-100 text-red-700 border border-red-200' :
-                          'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200'
-                        }`}
-                      >
-                        {cmsStatus === 'testing' ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                            Testing...
-                          </>
-                        ) : cmsStatus === 'success' ? (
-                          <>
-                            <CheckCircle className="w-4 h-4" />
-                            Connection Successful!
-                          </>
-                        ) : cmsStatus === 'error' ? (
-                          <>
-                            <AlertCircle className="w-4 h-4" />
-                            Connection Failed
-                          </>
-                        ) : (
-                          <>
-                            <Zap className="w-4 h-4" />
-                            Test Connection
-                          </>
-                        )}
-                      </button>
-                      {cmsError && (
-                        <p className="mt-2 text-xs text-red-600 text-center">{cmsError}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="p-6 rounded-2xl bg-amber-50 border border-amber-100">
-                    <h3 className="text-lg font-bold text-amber-900 mb-2">How it works</h3>
-                    <p className="text-sm text-amber-800 leading-relaxed">
-                      We use <strong>Sanity.io</strong> as a Headless CMS. This allows you to edit text, images, and testimonials without touching the code. 
-                      Changes made in Sanity will reflect on the website in real-time.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-indigo-600" />
-                        Sanity Explorer
-                      </h3>
-                      <button 
-                        onClick={fetchSanityData}
-                        className="p-2 text-slate-500 hover:text-indigo-600 transition-colors"
-                        title="Refresh Data"
-                      >
-                        <RefreshCw className={`w-4 h-4 ${loadingSanity ? 'animate-spin' : ''}`} />
-                      </button>
-                    </div>
-
-                    <div className="max-h-[400px] overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                      {loadingSanity ? (
-                        <div className="flex flex-col items-center justify-center py-12 text-slate-400">
-                          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mb-3"></div>
-                          <p className="text-sm">Fetching data from Content Lake...</p>
-                        </div>
-                      ) : sanityData.length === 0 ? (
-                        <div className="text-center py-12 text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
-                          No data found in Sanity. Try syncing a cleaner first.
-                        </div>
-                      ) : (
-                        sanityData.map((item: any) => (
-                          <div key={item._id} className="p-4 bg-white rounded-xl border border-slate-100 shadow-sm hover:border-indigo-200 transition-all group/item">
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex flex-col">
-                                <span className="font-bold text-slate-900">{item.name}</span>
-                                <span className="text-[10px] font-mono text-slate-400">
-                                  ID: {item._id ? item._id.substring(0, 12) : 'N/A'}...
-                                </span>
-                              </div>
-                              <button
-                                onClick={() => handleDeleteSanityEntry(item._id, item.name)}
-                                disabled={deletingSanityId === item._id}
-                                className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover/item:opacity-100 disabled:opacity-50"
-                                title="Delete from Sanity"
-                              >
-                                {deletingSanityId === item._id ? (
-                                  <div className="w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
-                                ) : (
-                                  <X className="w-4 h-4" />
-                                )}
-                              </button>
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-xs text-slate-500 truncate">
-                                <span className="font-medium text-slate-700">Email:</span> {item.email}
-                              </div>
-                              <div className="text-xs text-slate-500">
-                                <span className="font-medium text-slate-700">Role:</span> {item.role}
-                              </div>
-                              {item.bio && (
-                                <div className="text-xs text-slate-500 line-clamp-2 italic mt-2 border-l-2 border-slate-200 pl-2">
-                                  "{item.bio}"
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Customer Notes Modal */}
       {viewingNotesCustomerId && (
@@ -1983,6 +2366,75 @@ export default function AdminDashboard() {
                 customerId={viewingNotesCustomerId} 
                 customerName={viewingNotesCustomerName} 
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedJobForBonus && (
+        <BonusModal
+          isOpen={!!selectedJobForBonus}
+          onClose={() => setSelectedJobForBonus(null)}
+          onSave={async (bonus) => {
+            try {
+              const res = await fetch(`/api/jobs/${selectedJobForBonus.id}/bonus`, {
+                method: "POST",
+                headers: { ...adminHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify({ bonus }),
+              });
+              if (res.ok) {
+                setSelectedJobForBonus(null);
+                refreshAllData();
+                alert("Bonus added successfully!");
+              } else {
+                alert("Failed to add bonus.");
+              }
+            } catch (err) {
+              console.error(err);
+              alert("Error adding bonus.");
+            }
+          }}
+          currentBonus={selectedJobForBonus.custom_bonus || 0}
+        />
+      )}
+      {selectedJobForPayout && (
+        <PayoutModal
+          isOpen={!!selectedJobForPayout}
+          onClose={() => setSelectedJobForPayout(null)}
+          onSave={async (payout) => {
+            try {
+              const res = await fetch(`/api/jobs/${selectedJobForPayout.id}/update-payout`, {
+                method: "POST",
+                headers: { ...adminHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify({ payout }),
+              });
+              if (res.ok) {
+                setSelectedJobForPayout(null);
+                refreshAllData();
+                alert("Payout modified successfully!");
+              } else {
+                alert("Failed to modify payout.");
+              }
+            } catch (err) {
+              console.error(err);
+              alert("Error modifying payout.");
+            }
+          }}
+          currentPayout={selectedJobForPayout.final_cleaner_payout || selectedJobForPayout.cleaner_payout || 0}
+        />
+      )}
+      {showRemoveModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
+            <h2 className="text-lg font-bold mb-4">Are you sure?</h2>
+            <p className="text-sm text-slate-600 mb-4">Are you sure you want to remove this cleaner from the job?</p>
+            <label className="flex items-center gap-2 mb-6 text-sm">
+              <input type="checkbox" checked={addStrike} onChange={(e) => setAddStrike(e.target.checked)} />
+              Add a strike to this cleaner's account?
+            </label>
+            <div className="flex gap-3">
+              <button onClick={() => setShowRemoveModal(false)} className="flex-1 px-4 py-2 bg-slate-100 rounded-lg text-sm font-semibold hover:bg-slate-200">Cancel</button>
+              <button onClick={confirmRemoveCleaner} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-semibold hover:bg-red-700">Yes, Remove</button>
             </div>
           </div>
         </div>

@@ -3,16 +3,28 @@ import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { User, Settings as SettingsIcon, Trash2, Save, Bell, Shield, Heart, AlertTriangle, Clock, Camera, X, FileText, Download } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
+import { TermsModal } from "../components/TermsModal";
+
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements } from '@stripe/react-stripe-js';
+import { PaymentMethodForm } from '../components/PaymentMethodForm';
+import { PaymentMethodList } from '../components/PaymentMethodList';
+
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
 
 export default function Settings() {
   const { user, loading, logout, login } = useAuth();
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { t } = useTranslation();
   const [formData, setFormData] = useState({
     full_name: "",
     phone_number: "",
     bio: "",
-    address: "",
     profile_picture: "" as string | null,
     cv: "" as string | null,
     preferences: {
@@ -20,9 +32,9 @@ export default function Settings() {
       email_notifications: true,
       sms_notifications: false,
       marketing: false,
-      preferred_time: "morning",
-      has_pets: false,
-      entry_instructions: ""
+      entry_instructions: "",
+      languages: "",
+      preferred_language: "English"
     }
   });
   const [isSaving, setIsSaving] = useState(false);
@@ -36,8 +48,32 @@ export default function Settings() {
     }
     if (user) {
       fetchUserData();
+      if (searchParams.get('addCard') === 'true') {
+        initPaymentSetup();
+      }
     }
-  }, [user, loading, navigate]);
+  }, [user, loading, navigate, searchParams]);
+
+  const initPaymentSetup = async () => {
+    try {
+      const res = await fetch('/api/create-setup-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ homeowner_id: user?.id, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage({ type: 'error', text: data.error });
+      } else if (data.clientSecret) {
+        setClientSecret(data.clientSecret);
+      } else {
+        setMessage({ type: 'error', text: 'Failed to initialize payment setup.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage({ type: 'error', text: 'An error occurred while initializing payment setup.' });
+    }
+  };
 
   const fetchUserData = async () => {
     try {
@@ -49,14 +85,23 @@ export default function Settings() {
       });
       if (res.ok) {
         const data = await res.json();
+        
+    // Parse address if it was stored as a combined string
+        
         setFormData({
           full_name: data.full_name || "",
           phone_number: data.phone_number || "",
           bio: data.bio || "",
-          address: data.address || "",
           profile_picture: data.profile_picture || null,
           cv: data.cv || null,
-          preferences: data.preferences ? JSON.parse(data.preferences) : formData.preferences
+          preferences: data.preferences ? (() => {
+            try {
+              return JSON.parse(data.preferences);
+            } catch (e) {
+              console.error("Error parsing preferences:", e);
+              return formData.preferences;
+            }
+          })() : formData.preferences
         });
       }
     } catch (err) {
@@ -81,7 +126,6 @@ export default function Settings() {
           full_name: formData.full_name,
           phone_number: formData.phone_number,
           bio: formData.bio,
-          address: formData.address,
           profile_picture: formData.profile_picture,
           cv: formData.cv,
           preferences: JSON.stringify(formData.preferences)
@@ -98,7 +142,9 @@ export default function Settings() {
             profile_picture: formData.profile_picture || undefined
           });
         }
+        fetchUserData();
       } else {
+        console.error("Failed to save settings:", await res.text());
         setMessage({ type: 'error', text: t('settings.save_error') || "Failed to save settings." });
       }
     } catch (err) {
@@ -242,15 +288,6 @@ export default function Settings() {
               />
             </div>
             <div className="md:col-span-2 space-y-2">
-              <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('settings.address') || "Address"}</label>
-              <input
-                type="text"
-                value={formData.address}
-                onChange={e => setFormData({...formData, address: e.target.value})}
-                className="w-full px-5 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
-              />
-            </div>
-            <div className="md:col-span-2 space-y-2">
               <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('settings.bio') || "Bio / About"}</label>
               <textarea
                 rows={4}
@@ -363,50 +400,37 @@ export default function Settings() {
             </div>
 
             <div className="grid md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('settings.preferred_time') || "Preferred Cleaning Time"}</label>
-                <select
-                  value={formData.preferences.preferred_time}
-                  onChange={e => setFormData({
-                    ...formData,
-                    preferences: {...formData.preferences, preferred_time: e.target.value}
-                  })}
-                  className="w-full px-5 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all bg-white"
-                >
-                  <option value="morning">{t('settings.morning') || "Morning (8am - 12pm)"}</option>
-                  <option value="afternoon">{t('settings.afternoon') || "Afternoon (12pm - 4pm)"}</option>
-                  <option value="evening">{t('settings.evening') || "Evening (4pm - 8pm)"}</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                <input
-                  type="checkbox"
-                  id="has_pets"
-                  checked={formData.preferences.has_pets}
-                  onChange={e => setFormData({
-                    ...formData,
-                    preferences: {...formData.preferences, has_pets: e.target.checked}
-                  })}
-                  className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <label htmlFor="has_pets" className="font-bold text-slate-900 cursor-pointer">
-                  {t('settings.has_pets') || "I have pets at home"}
-                </label>
-              </div>
-            </div>
+              {user.role === 'cleaner' && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('settings.languages_spoken') || "Languages Spoken"}</label>
+                  <input
+                    type="text"
+                    value={formData.preferences.languages}
+                    onChange={e => setFormData({
+                      ...formData,
+                      preferences: {...formData.preferences, languages: e.target.value}
+                    })}
+                    className="w-full px-5 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                    placeholder={t('settings.languages_placeholder') || "e.g., English, Spanish"}
+                  />
+                </div>
+              )}
 
-            <div className="space-y-2">
-              <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('settings.entry_instructions') || "Entry Instructions"}</label>
-              <input
-                type="text"
-                placeholder={t('settings.entry_placeholder') || "e.g., Key under the mat, gate code 1234..."}
-                value={formData.preferences.entry_instructions}
-                onChange={e => setFormData({
-                  ...formData,
-                  preferences: {...formData.preferences, entry_instructions: e.target.value}
-                })}
-                className="w-full px-5 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
-              />
+              {user.role === 'homeowner' && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">{t('settings.preferred_language') || "Preferred Language"}</label>
+                  <input
+                    type="text"
+                    value={formData.preferences.preferred_language}
+                    onChange={e => setFormData({
+                      ...formData,
+                      preferences: {...formData.preferences, preferred_language: e.target.value}
+                    })}
+                    className="w-full px-5 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                    placeholder={t('settings.preferred_language_placeholder') || "e.g., English"}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -424,6 +448,43 @@ export default function Settings() {
       </form>
 
       {/* Account Management Section */}
+      <div className="pt-10 border-t border-slate-200">
+        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
+            <Shield className="w-5 h-5 text-slate-600" />
+            <h2 className="text-xl font-bold font-display text-slate-900">Payment Methods</h2>
+          </div>
+          <div className="p-8 space-y-6">
+            <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-emerald-900 text-sm">
+              <p className="font-bold mb-1">Why add a payment method?</p>
+              <p>We require a payment method on file to secure your booking. You will NOT be charged until your service is completed. Please review our <button onClick={() => setShowTermsModal(true)} className="underline font-bold">Terms and Conditions</button> for details on our cancellation policy.</p>
+            </div>
+            <PaymentMethodList />
+            {!clientSecret ? (
+              <button
+                type="button"
+                onClick={initPaymentSetup}
+                className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700"
+              >
+                Add Payment Method
+              </button>
+            ) : (
+              <Elements stripe={stripePromise} options={{ clientSecret }}>
+                <PaymentMethodForm onComplete={() => {
+                  setClientSecret(null);
+                  setRefresh(prev => prev + 1);
+                  setMessage({ type: 'success', text: 'Payment method added successfully!' });
+                  if (localStorage.getItem('pendingQuote')) {
+                    navigate('/quote');
+                  }
+                }} />
+              </Elements>
+            )}
+            <TermsModal isOpen={showTermsModal} onClose={() => setShowTermsModal(false)} />
+          </div>
+        </div>
+      </div>
+
       <div className="pt-10 border-t border-slate-200">
         <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">

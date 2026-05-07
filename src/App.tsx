@@ -25,6 +25,8 @@ import FeedbackButton from "./components/FeedbackButton";
 export default function App() {
   const { t, i18n } = useTranslation();
 
+  console.log("Date is global:", Date === window.Date);
+
   useEffect(() => {
     document.title = t('common.site_name');
   }, [t, i18n.language]);

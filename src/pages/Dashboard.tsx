@@ -2,8 +2,16 @@ import React, { useState, useEffect } from "react";
 import { formatDate, formatTime, formatDateTime } from "../utils/dateUtils";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { Home, Calendar, Plus, Save, Star, Clock, MapPin, DollarSign, CheckCircle } from "lucide-react";
+import { Home, Calendar, Plus, Save, Star, Clock, MapPin, DollarSign, CheckCircle, CreditCard, Trash2, Edit2, X } from "lucide-react";
+import { ConfirmationModal } from "../components/ConfirmationModal";
+import { CancelSubscriptionModal } from "../components/CancelSubscriptionModal";
 import { useTranslation } from "react-i18next";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements } from "@stripe/react-stripe-js";
+import { PaymentForm } from "../components/PaymentForm";
+import { PaymentMethodList } from "../components/PaymentMethodList";
+
+const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY) : null;
 
 export default function Dashboard() {
   const { user, loading } = useAuth();
@@ -11,12 +19,87 @@ export default function Dashboard() {
   const { t } = useTranslation();
   const [properties, setProperties] = useState<any[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
+  const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newProp, setNewProp] = useState({ address: "", sqft: 1500, beds: 3, baths: 2, living: 1, offices: 0, windows: 10 });
+  const [editingProperty, setEditingProperty] = useState<any | null>(null);
+  const [newProp, setNewProp] = useState({ address: "", city: "", postalCode: "", sqft: 1500, beds: 3, baths: 2, living: 1, offices: 0, kitchens: 1, floors: 1, entryInstructions: "", preferredTime: "Morning (8am - 12pm)", hasPets: false });
   const [rebookModal, setRebookModal] = useState<{ show: boolean, property: any, lastJob: any }>({ show: false, property: null, lastJob: null });
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [confirmingCancelId, setConfirmingCancelId] = useState<string | null>(null);
+  const [showPaymentModal, setShowPaymentModal] = useState<string | null>(null);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentBreakdown, setPaymentBreakdown] = useState<any | null>(null);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [deleteModal, setDeleteModal] = useState<{ show: boolean, propertyId: string | null }>({ show: false, propertyId: null });
+  const [cancelModal, setCancelModal] = useState<{ show: boolean, sub: any | null, message: string }>({ show: false, sub: null, message: "" });
+  const [cancelJobModal, setCancelJobModal] = useState<{ show: boolean, jobId: string | null }>({ show: false, jobId: null });
+  const [subscriptionDetailsModal, setSubscriptionDetailsModal] = useState<{ show: boolean, sub: any | null }>({ show: false, sub: null });
+
+  const handleViewSubscriptionDetails = (sub: any) => {
+    setSubscriptionDetailsModal({ show: true, sub });
+  };
+
+  const [postponeModal, setPostponeModal] = useState<{ show: boolean, job: any | null }>({ show: false, job: null });
+  const [newDate, setNewDate] = useState("");
+  const [isPostponing, setIsPostponing] = useState(false);
+
+  const handlePostponeJob = (job: any) => {
+    setPostponeModal({ show: true, job });
+  };
+
+  const confirmPostpone = async () => {
+    if (!postponeModal.job || !newDate) {
+      alert("Please select a new date.");
+      return;
+    }
+    setIsPostponing(true);
+
+    try {
+      const res = await fetch(`/api/jobs/${postponeModal.job.id}/postpone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_date: newDate, subscription_id: postponeModal.job.subscription_id })
+      });
+
+      if (res.ok) {
+        setPostponeModal({ show: false, job: null });
+        setNewDate("");
+        fetchJobs();
+        alert("Job postponed successfully!");
+      } else {
+        const data = await res.json();
+        alert(data.error || "Failed to postpone job");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error postponing job");
+    } finally {
+      setIsPostponing(false);
+    }
+  };
+
+  useEffect(() => {
+    console.log("Subscriptions state updated:", subscriptions);
+  }, [subscriptions]);
+
+  useEffect(() => {
+    if (showPaymentModal) {
+      fetch("/api/create-payment-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: showPaymentModal })
+      })
+        .then(res => res.json())
+        .then(data => {
+          setClientSecret(data.clientSecret);
+          setPaymentBreakdown(data.breakdown);
+        })
+        .catch(err => console.error("Error fetching client secret:", err));
+    } else {
+      setClientSecret(null);
+      setPaymentBreakdown(null);
+    }
+  }, [showPaymentModal]);
 
   useEffect(() => {
     if (actionMessage) {
@@ -35,15 +118,22 @@ export default function Dashboard() {
         navigate("/cleaner");
         return;
       }
+      if (user.role === "admin") {
+        navigate("/admin");
+        return;
+      }
       fetchProperties();
       fetchJobs();
+      fetchSubscriptions();
     }
   }, [user, loading, navigate]);
 
   const fetchProperties = async () => {
+    console.log("Fetching properties for user:", user?.id);
     try {
       const res = await fetch(`/api/properties/${user?.id}`);
       const data = await res.json();
+      console.log("Fetched properties:", data);
       setProperties(data);
     } catch (err) {
       console.error(err);
@@ -54,35 +144,88 @@ export default function Dashboard() {
     try {
       const res = await fetch(`/api/jobs/homeowner/${user?.id}`);
       const data = await res.json();
-      setJobs(data);
+      setJobs(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const handleAddProperty = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const fetchSubscriptions = async () => {
     try {
-      const res = await fetch("/api/properties", {
-        method: "POST",
+      const res = await fetch(`/api/subscriptions/homeowner/${user?.id}`);
+      const data = await res.json();
+      console.log("Fetched subscriptions:", data);
+      setSubscriptions(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveProperty = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newProp.floors <= 0) {
+      alert("Floors must be greater than 0");
+      return;
+    }
+    try {
+      const url = editingProperty ? `/api/properties/${editingProperty.id}` : "/api/properties";
+      const method = editingProperty ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           owner_id: user?.id,
-          address: newProp.address,
+          address: `${newProp.address}, ${newProp.city}`,
+          postal_code: newProp.postalCode,
           square_feet: newProp.sqft,
           bedrooms: newProp.beds,
           bathrooms: newProp.baths,
           living_rooms: newProp.living,
           offices: newProp.offices,
-          windows: newProp.windows
+          kitchens: newProp.kitchens,
+          floors: newProp.floors,
+          entry_instructions: newProp.entryInstructions,
+          preferred_time: newProp.preferredTime,
+          has_pets: newProp.hasPets
         })
       });
       if (res.ok) {
         setShowAddForm(false);
+        setEditingProperty(null);
         fetchProperties();
+      } else {
+        const data = await res.json();
+        alert(`Failed to save property: ${data.error || 'Unknown error'}`);
       }
     } catch (err) {
       console.error(err);
+      alert("Error saving property.");
+    }
+  };
+
+  const handleDeleteProperty = async (propertyId: string) => {
+    console.log("Deleting property:", propertyId, "User ID:", user?.id);
+    setDeleteModal({ show: true, propertyId });
+  };
+
+  const confirmDeleteProperty = async () => {
+    const propertyId = deleteModal.propertyId;
+    if (!propertyId) return;
+    try {
+      const res = await fetch(`/api/properties/${propertyId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner_id: user?.id })
+      });
+      if (res.ok) {
+        fetchProperties();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(`Failed to delete property: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error deleting property.");
     }
   };
 
@@ -151,7 +294,6 @@ export default function Dashboard() {
 
   const [ratingComment, setRatingComment] = useState<{ [key: string]: string }>({});
   const [selectedRating, setSelectedRating] = useState<{ [key: string]: number }>({});
-  const [showPaymentModal, setShowPaymentModal] = useState<string | null>(null);
   const [isPaying, setIsPaying] = useState(false);
 
   const handleRateJob = async (jobId: string) => {
@@ -197,8 +339,94 @@ export default function Dashboard() {
     }
   };
 
+  const handleAcceptQuote = async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/accept-quote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (res.ok) {
+        fetchJobs();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRejectQuote = async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/reject-quote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (res.ok) {
+        fetchJobs();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleCancelSubscription = (sub: any) => {
+    console.log("Cancelling subscription:", sub);
+    const futureBookings = Array.isArray(jobs) ? jobs.filter(j => j.subscription_id === sub.id && j.job_lifecycle_status !== 'completed' && j.job_lifecycle_status !== 'cancelled') : [];
+    console.log("Future bookings:", futureBookings);
+    const hasStarted = sub.completed_cleanings > 0 || futureBookings.length > 0;
+    console.log("Has started:", hasStarted);
+    
+    const minCommitments: Record<string, number> = {
+      'monthly': 4,
+      'biweekly': 8,
+      'weekly': 16
+    };
+    const minRequired = minCommitments[sub.frequency] || 0;
+    const isEarly = sub.completed_cleanings < minRequired;
+    
+    let message = `Are you sure you want to cancel your ${sub.frequency} subscription for ${sub.properties?.address}?`;
+    
+    if (hasStarted) {
+      message += `\n\nNote: Bookings have already been made for this plan. You will be charged according to the terms and conditions.`;
+    }
+    
+    if (isEarly) {
+      message += `\n\nNote: You have completed ${sub.completed_cleanings} out of the required ${minRequired} cleanings for this plan. An early cancellation fee of $${sub.total_discount_received.toFixed(2)} (the total discounts you've received so far) will be applied.`;
+    }
+    
+    setCancelModal({ show: true, sub, message });
+  };
+
+  const confirmCancelSubscription = async () => {
+    const { sub } = cancelModal;
+    if (!sub) return;
+
+    try {
+      console.log("Sending cancellation request...");
+      const res = await fetch("/api/jobs/cancel-subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscription_id: sub.id,
+          homeowner_id: user?.id
+        })
+      });
+      if (res.ok) {
+        console.log("Subscription cancelled successfully.");
+        alert("Subscription cancelled successfully.");
+        setSubscriptions(prev => prev.filter(s => s.id !== sub.id));
+      } else {
+        const data = await res.json();
+        console.error("Failed to cancel subscription:", data);
+        alert("Failed to cancel subscription: " + JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error("Error cancelling subscription:", err);
+      alert("Error cancelling subscription.");
+    }
+    setCancelModal({ show: false, sub: null, message: "" });
+  };
+
   const handleCancel = async (jobId: string) => {
-    setCancellingJobId(jobId);
+    setCancelJobModal({ show: false, jobId: null });
     setActionMessage(null);
 
     try {
@@ -211,7 +439,11 @@ export default function Dashboard() {
       const data = await res.json().catch(() => ({ error: "Server error" }));
 
       if (res.ok) {
-        setActionMessage({ type: 'success', text: t('dashboard.cancel_success') || "Booking cancelled successfully!" });
+        if (data.warning) {
+          setActionMessage({ type: 'error', text: data.warning });
+        } else {
+          setActionMessage({ type: 'success', text: t('dashboard.cancel_success') || "Booking cancelled successfully!" });
+        }
         fetchJobs();
       } else {
         setActionMessage({ type: 'error', text: data.error || t('dashboard.failed_cancel_job') });
@@ -225,11 +457,12 @@ export default function Dashboard() {
   };
 
   const renderJobDate = (job: any) => {
+    console.log("Job object (Dashboard):", job);
     if (job.job_lifecycle_status === 'claimed_scheduled') {
       return (
         <span className="text-emerald-600 flex items-center gap-1.5 font-bold">
           <CheckCircle className="w-4 h-4" />
-          {t('dashboard.confirmed')}: {formatDate(job.specific_date || job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+          {t('dashboard.confirmed')}: {formatDate(job.specific_date || job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}{job.time_frame ? ` (${job.time_frame})` : ''}
         </span>
       );
     }
@@ -238,7 +471,7 @@ export default function Dashboard() {
       return (
         <div className="flex items-center gap-1.5">
           <Calendar className="w-4 h-4 text-slate-400" />
-          {formatDate(job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} - {formatDate(job.scheduled_end_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+          {formatDate(job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} - {formatDate(job.scheduled_end_date, { weekday: 'short', month: 'short', day: 'numeric' })}{job.time_frame ? ` (${job.time_frame})` : ''}
         </div>
       );
     }
@@ -246,7 +479,7 @@ export default function Dashboard() {
     return (
       <div className="flex items-center gap-1.5">
         <Calendar className="w-4 h-4 text-slate-400" />
-        {formatDate(job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+        {formatDate(job.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}{job.time_frame ? ` (${job.time_frame})` : ''}
       </div>
     );
   };
@@ -264,13 +497,7 @@ export default function Dashboard() {
     const targetDate = new Date(y, m - 1, d);
     const now = new Date();
     
-    // If it's within 24h, it's only cancellable if it hasn't been claimed yet
-    const twentyFourHours = 24 * 60 * 60 * 1000;
-    const isWithin24h = (targetDate.getTime() - now.getTime()) < twentyFourHours;
-    
-    if (isWithin24h && job.cleaner_id) {
-      return false;
-    }
+    // If it's within 24h, it's now cancellable with a fee
     
     return true;
   };
@@ -336,17 +563,44 @@ export default function Dashboard() {
             
             <div className="p-8 space-y-6 bg-white flex-1">
               {showAddForm && (
-                <form onSubmit={handleAddProperty} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4 mb-6">
-                  <h3 className="font-bold font-display text-slate-900">{t('dashboard.add_new_property')}</h3>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">{t('dashboard.address')}</label>
-                    <input 
-                      type="text" 
-                      required
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
-                      value={newProp.address}
-                      onChange={e => setNewProp({...newProp, address: e.target.value})}
-                    />
+                <form onSubmit={handleSaveProperty} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4 mb-6">
+                  <h3 className="font-bold font-display text-slate-900">{editingProperty ? t('dashboard.edit_property') : t('dashboard.add_new_property')}</h3>
+                  <div className="grid grid-cols-1 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Address</label>
+                      <input 
+                        type="text" 
+                        required
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                        value={newProp.address}
+                        onChange={e => setNewProp({...newProp, address: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">City</label>
+                      <input 
+                        type="text" 
+                        required
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                        value={newProp.city}
+                        onChange={e => setNewProp({...newProp, city: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Postal Code</label>
+                      <input 
+                        type="text" 
+                        required
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                        value={newProp.postalCode}
+                        onChange={e => setNewProp({...newProp, postalCode: e.target.value})}
+                      />
+                      {['h3c0y9', 'h4r3j8'].includes(newProp.postalCode.toLowerCase().replace(/\s/g, '')) && (
+                        <p className="text-xs text-emerald-600 font-bold mt-1">location discount applied.</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -354,9 +608,10 @@ export default function Dashboard() {
                       <input 
                         type="number" 
                         required
+                        min="0"
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
                         value={newProp.sqft}
-                        onChange={e => setNewProp({...newProp, sqft: parseInt(e.target.value)})}
+                        onChange={e => setNewProp({...newProp, sqft: e.target.value === "" ? 0 : parseInt(e.target.value)})}
                       />
                     </div>
                     <div>
@@ -364,9 +619,10 @@ export default function Dashboard() {
                       <input 
                         type="number" 
                         required
+                        min="0"
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
                         value={newProp.beds}
-                        onChange={e => setNewProp({...newProp, beds: parseInt(e.target.value)})}
+                        onChange={e => setNewProp({...newProp, beds: e.target.value === "" ? 0 : parseInt(e.target.value)})}
                       />
                     </div>
                     <div>
@@ -374,20 +630,86 @@ export default function Dashboard() {
                       <input 
                         type="number" 
                         required
+                        min="0"
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
                         value={newProp.baths}
-                        onChange={e => setNewProp({...newProp, baths: parseInt(e.target.value)})}
+                        onChange={e => setNewProp({...newProp, baths: e.target.value === "" ? 0 : parseInt(e.target.value)})}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">{t('dashboard.windows')}</label>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Living Rooms</label>
                       <input 
                         type="number" 
                         required
+                        min="0"
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
-                        value={newProp.windows}
-                        onChange={e => setNewProp({...newProp, windows: parseInt(e.target.value)})}
+                        value={newProp.living}
+                        onChange={e => setNewProp({...newProp, living: e.target.value === "" ? 0 : parseInt(e.target.value)})}
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Offices</label>
+                      <input 
+                        type="number" 
+                        required
+                        min="0"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                        value={newProp.offices}
+                        onChange={e => setNewProp({...newProp, offices: e.target.value === "" ? 0 : parseInt(e.target.value)})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Floors</label>
+                      <input 
+                        type="number" 
+                        required
+                        min="1"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                        value={newProp.floors || 1}
+                        onChange={e => setNewProp({...newProp, floors: e.target.value === "" ? 1 : Math.max(1, parseInt(e.target.value))})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Kitchens</label>
+                      <input 
+                        type="number" 
+                        required
+                        min="0"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                        value={newProp.kitchens}
+                        onChange={e => setNewProp({...newProp, kitchens: e.target.value === "" ? "" : parseInt(e.target.value, 10)})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Entry Instructions</label>
+                      <input 
+                        type="text" 
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                        value={newProp.entryInstructions}
+                        onChange={e => setNewProp({...newProp, entryInstructions: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Preferred Cleaning Time</label>
+                      <select
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all bg-white"
+                        value={newProp.preferredTime}
+                        onChange={e => setNewProp({...newProp, preferredTime: e.target.value})}
+                      >
+                        <option value="Morning (8am - 12pm)">Morning (8am - 12pm)</option>
+                        <option value="Afternoon (12pm - 4pm)">Afternoon (12pm - 4pm)</option>
+                        <option value="Evening (4pm - 8pm)">Evening (4pm - 8pm)</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="hasPets"
+                        checked={newProp.hasPets}
+                        onChange={e => setNewProp({...newProp, hasPets: e.target.checked})}
+                        className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <label htmlFor="hasPets" className="text-sm font-medium text-slate-700">Has Pets</label>
                     </div>
                   </div>
                   <button type="submit" className="w-full py-2.5 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors">
@@ -408,18 +730,53 @@ export default function Dashboard() {
                   </button>
                 </div>
               ) : (
-                properties.map(prop => (
+                Array.isArray(properties) && properties.map(prop => (
                   <div key={prop.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all group">
                     <div className="flex items-start gap-3 mb-4">
                       <div className="bg-slate-50 p-2.5 rounded-xl text-slate-600">
                         <MapPin className="w-5 h-5" />
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <h3 className="font-bold text-slate-900">{prop.address || t('dashboard.unnamed_property')}</h3>
                         <p className="text-sm text-slate-500 mt-0.5">
                           {prop.square_feet} sqft • {prop.bedrooms} bed • {prop.bathrooms} bath
                         </p>
+                        {['h3c0y9', 'h4r3j8'].includes(prop.postal_code?.toLowerCase().replace(/\s/g, '')) && (
+                          <p className="text-xs text-emerald-600 font-bold mt-1">location discount applied</p>
+                        )}
                       </div>
+                      <button 
+                        onClick={() => {
+                          setEditingProperty(prop);
+                          setShowAddForm(true);
+                          // Pre-populate newProp state with prop data
+                          const [street, city] = prop.address.split(', ');
+                          setNewProp({
+                            address: street,
+                            city: city || '',
+                            postalCode: prop.postal_code,
+                            sqft: prop.square_feet,
+                            beds: prop.bedrooms,
+                            baths: prop.bathrooms,
+                            living: prop.living_rooms,
+                            offices: prop.offices,
+                            kitchens: prop.kitchens,
+                            floors: (prop.floors && prop.floors >= 1) ? prop.floors : 1,
+                            entryInstructions: prop.entry_instructions || "",
+                            preferredTime: prop.preferred_time || "Morning (8am - 12pm)",
+                            hasPets: prop.has_pets || false
+                          });
+                        }}
+                        className="text-slate-400 hover:text-emerald-500 transition-colors mr-2"
+                      >
+                        <Edit2 className="w-5 h-5" />
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteProperty(prop.id)}
+                        className="text-slate-400 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
                     </div>
                     <button 
                       onClick={() => handleBook(prop)}
@@ -445,145 +802,104 @@ export default function Dashboard() {
                 {t('dashboard.active_bookings')}
               </h2>
               <span className="bg-emerald-100 text-emerald-700 py-1.5 px-4 rounded-full text-sm font-bold shadow-sm">
-                {jobs.filter(j => j.job_lifecycle_status !== 'completed' && j.job_lifecycle_status !== 'cancelled').length}
+                {Array.isArray(jobs) ? jobs.filter(j => j.job_lifecycle_status !== 'completed' && j.job_lifecycle_status !== 'cancelled').length : 0}
               </span>
             </div>
             
             <div className="p-8 space-y-6">
-              {jobs.filter(j => j.job_lifecycle_status !== 'completed' && j.job_lifecycle_status !== 'cancelled').length === 0 ? (
-                <div className="text-center py-12 text-slate-500 bg-white rounded-2xl border border-slate-100 border-dashed">
-                  <Calendar className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                  <p className="text-lg">{t('dashboard.no_active_bookings')}</p>
-                  <p className="text-sm mt-1">{t('dashboard.select_property_book')}</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {jobs.filter(j => j.job_lifecycle_status !== 'completed' && j.job_lifecycle_status !== 'cancelled').map(job => (
-                    <div key={job.id} className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm hover:shadow-md transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-start gap-4">
-                        <div className="relative">
-                          <div className="bg-emerald-50 w-14 h-14 rounded-2xl flex items-center justify-center text-emerald-600 overflow-hidden border border-emerald-100">
-                            {job.cleaner_picture ? (
-                              <img 
-                                src={job.cleaner_picture} 
-                                alt={job.cleaner_name} 
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <Calendar className="w-7 h-7" />
-                            )}
-                          </div>
-                          {job.cleaner_id && (
-                            <div className="absolute -bottom-1 -right-1 bg-white p-1 rounded-lg shadow-sm border border-slate-100">
-                              <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="font-bold text-lg text-slate-900">
-                              {renderJobDate(job)}
-                            </h3>
-                            {job.cleaner_name && (
-                              <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
-                                {t('dashboard.cleaner') || "Cleaner"}: {job.cleaner_name}
-                              </span>
-                            )}
-                            {job.job_lifecycle_status === 'pending_quote' ? (
-                              <span className="px-2.5 py-0.5 bg-purple-100 text-purple-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                                {t('dashboard.pending_quote') || "Pending Quote"}
-                              </span>
-                            ) : job.job_lifecycle_status === 'pending_claim' ? (
-                              <span className="px-2.5 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                                {t('dashboard.pending')}
-                              </span>
-                            ) : (
-                              <span className="px-2.5 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-                                <Clock className="w-3 h-3" />
-                                {t('dashboard.scheduled')} {job.specific_date ? `for ${formatDate(job.specific_date)}` : ''}
-                              </span>
-                            )}
-                          </div>
-                          {job.address && (
-                            <div className="flex items-center gap-1.5 text-sm text-slate-500 mt-1">
-                              <MapPin className="w-3.5 h-3.5" />
-                              {job.address}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <div className="text-right">
-                          <div className="text-2xl font-bold font-display text-slate-900">
-                            ${job.final_transaction_price.toFixed(2)}
-                          </div>
-                          <div className="text-xs text-slate-500 uppercase tracking-wider font-medium mt-1">
-                            {t('dashboard.total_price')}
-                          </div>
-                        </div>
-                        {job.job_lifecycle_status !== 'completed' && job.job_lifecycle_status !== 'cancelled' && (
-                          <div className="flex flex-col items-end gap-2">
-                            {confirmingCancelId === job.id ? (
-                              <div className="flex items-center gap-2 bg-red-50 p-2 rounded-xl border border-red-100 animate-in fade-in slide-in-from-right-2">
-                                <span className="text-[10px] font-bold text-red-700 uppercase tracking-wider">{t('common.are_you_sure')}</span>
-                                <button
-                                  onClick={() => {
-                                    handleCancel(job.id);
-                                    setConfirmingCancelId(null);
-                                  }}
-                                  className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-                                >
-                                  {t('dashboard.yes_cancel')}
-                                </button>
-                                <button
-                                  onClick={() => setConfirmingCancelId(null)}
-                                  className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
-                                >
-                                  {t('common.no')}
-                                </button>
+              {(() => {
+                const activeJobs = jobs.filter(j => j.job_lifecycle_status !== 'completed' && j.job_lifecycle_status !== 'cancelled');
+                
+                const grouped = activeJobs.reduce((acc, job) => {
+                  if (job.subscription_id) {
+                    if (!acc[job.subscription_id]) {
+                      acc[job.subscription_id] = { type: 'subscription', jobs: [], frequency: job.frequency };
+                    }
+                    acc[job.subscription_id].jobs.push(job);
+                  } else {
+                    acc[`job_${job.id}`] = { type: 'job', job };
+                  }
+                  return acc;
+                }, {} as Record<string, any>);
+
+                return Object.values(grouped).length === 0 ? (
+                  <div className="text-center py-12 text-slate-500 bg-white rounded-2xl border border-slate-100 border-dashed">
+                    <Calendar className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="text-lg">{t('dashboard.no_active_bookings')}</p>
+                    <p className="text-sm mt-1">{t('dashboard.select_property_book')}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {Object.values(grouped).map((item: any) => {
+                      if (item.type === 'subscription') {
+                        const nextJob = item.jobs.sort((a: any, b: any) => new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime())[0];
+                        return (
+                          <div key={`sub_${nextJob.subscription_id}`} className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm hover:shadow-md transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="flex items-start gap-4">
+                              <div className="bg-emerald-50 w-14 h-14 rounded-2xl flex items-center justify-center text-emerald-600 border border-emerald-100">
+                                <Calendar className="w-7 h-7" />
                               </div>
-                            ) : (
-                              <button
-                                disabled={cancellingJobId === job.id}
-                                onClick={() => {
-                                  if (isCancellable(job)) {
-                                    setConfirmingCancelId(job.id);
-                                  } else {
-                                    setActionMessage({ 
-                                      type: 'error', 
-                                      text: t('dashboard.cannot_cancel_24h_claimed') || "This job cannot be cancelled because it is less than 24 hours away and has already been claimed by a cleaner." 
-                                    });
-                                  }
-                                }}
-                                className={`text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-lg transition-colors ${
-                                  isCancellable(job) 
-                                    ? "text-red-500 hover:text-red-600 bg-red-50 hover:bg-red-100" 
-                                    : "text-slate-400 bg-slate-100 cursor-not-allowed"
-                                } ${cancellingJobId === job.id ? 'opacity-50 cursor-wait' : ''}`}
-                              >
-                                {cancellingJobId === job.id ? (
-                                  <span className="flex items-center gap-1">
-                                    <Clock className="w-3 h-3 animate-spin" />
-                                    {t('common.processing')}
-                                  </span>
-                                ) : job.job_lifecycle_status === 'pending_quote' 
-                                  ? t('dashboard.cancel_quote') 
-                                  : t('dashboard.cancel_booking')}
-                              </button>
-                            )}
+                              <div>
+                                <h3 className="font-bold text-lg text-slate-900">
+                                  {formatDate(nextJob.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+                                </h3>
+                                <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 mt-2 w-fit">
+                                  <Calendar className="w-3 h-3" />
+                                  {item.frequency}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                        );
+                      }
+                      const job = item.job;
+                      return (
+                        <div key={job.id} className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm hover:shadow-md transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="flex items-start gap-4">
+                            <div className="relative">
+                              <div className="bg-emerald-50 w-14 h-14 rounded-2xl flex items-center justify-center text-emerald-600 overflow-hidden border border-emerald-100">
+                                {job.cleaner_picture ? (
+                                  <img 
+                                    src={job.cleaner_picture} 
+                                    alt={job.cleaner_name} 
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  <Calendar className="w-7 h-7" />
+                                )}
+                              </div>
+                              {job.cleaner_id && (
+                                <div className="absolute -bottom-1 -right-1 bg-white p-1 rounded-lg shadow-sm border border-slate-100">
+                                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="font-bold text-lg text-slate-900">
+                                  {renderJobDate(job)}
+                                </h3>
+                              </div>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => setCancelJobModal({ show: true, jobId: job.id })}
+                            className="px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                          >
+                            {t('common.cancel')}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
           {/* Payments Needed */}
-          {jobs.filter(j => j.job_lifecycle_status === 'completed' && !j.paid).length > 0 && (
+          {Array.isArray(jobs) && jobs.filter(j => j.job_lifecycle_status === 'completed' && !j.paid).length > 0 && (
             <div className="bg-white rounded-3xl shadow-sm border border-amber-200 overflow-hidden relative">
               <div className="absolute top-0 left-0 w-1 h-full bg-amber-400"></div>
               <div className="p-6 border-b border-slate-100 flex items-center justify-between">
@@ -593,7 +909,7 @@ export default function Dashboard() {
                 </h2>
               </div>
               <div className="p-6 bg-amber-50/30 space-y-4">
-                {jobs.filter(j => j.job_lifecycle_status === 'completed' && !j.paid).map(job => (
+                {Array.isArray(jobs) && jobs.filter(j => j.job_lifecycle_status === 'completed' && !j.paid).map(job => (
                   <div key={job.id} className="bg-white rounded-2xl border border-amber-100 p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
                       <div className="flex items-center gap-2 text-sm text-slate-500 mb-1">
@@ -619,6 +935,81 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Recurring Plans */}
+          {subscriptions.length > 0 && (
+            <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+              <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-indigo-50/30">
+                <h2 className="text-2xl font-bold font-display text-slate-900 flex items-center gap-3">
+                  <Clock className="w-6 h-6 text-indigo-600" />
+                  Recurring Plans
+                </h2>
+                <span className="bg-indigo-100 text-indigo-700 py-1.5 px-4 rounded-full text-sm font-bold shadow-sm">
+                  {subscriptions.length}
+                </span>
+              </div>
+              <div className="p-8 space-y-6">
+                <div className="space-y-4">
+                  {subscriptions.map(sub => (
+                    <div key={sub.id} className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm hover:shadow-md transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className="bg-indigo-50 w-14 h-14 rounded-2xl flex items-center justify-center text-indigo-600 border border-indigo-100">
+                          <Calendar className="w-7 h-7" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-lg text-slate-900 capitalize">
+                              {sub.frequency} Plan
+                            </h3>
+                            <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                              Active
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-sm text-slate-500 mt-1">
+                            <MapPin className="w-3.5 h-3.5" />
+                            {sub.properties?.address}
+                          </div>
+                          <div className="flex items-center gap-4 mt-2">
+                            <div className="text-xs font-medium text-slate-500">
+                              <span className="text-indigo-600 font-bold">{sub.completed_cleanings}</span> Cleanings Completed
+                            </div>
+                            <div className="text-xs font-medium text-slate-500">
+                              Total Savings: <span className="text-emerald-600 font-bold">${sub.total_discount_received.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleViewSubscriptionDetails(sub)}
+                        className="px-6 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all text-sm"
+                      >
+                        View Details
+                      </button>
+                      <button
+                        onClick={() => handleCancelSubscription(sub)}
+                        className="px-6 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-all text-sm"
+                      >
+                        Cancel Plan
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Payment Methods */}
+          <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h2 className="text-2xl font-bold font-display text-slate-900 flex items-center gap-3">
+                <CreditCard className="w-6 h-6 text-slate-600" />
+                Payment Methods
+              </h2>
+            </div>
+            <div className="p-8">
+              <PaymentMethodList />
+            </div>
+          </div>
+
           {/* History & Reviews */}
           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-6 border-b border-slate-100">
@@ -628,12 +1019,12 @@ export default function Dashboard() {
               </h2>
             </div>
             <div className="p-6 bg-slate-50/50 space-y-4 max-h-[600px] overflow-y-auto">
-              {jobs.filter(j => j.job_lifecycle_status === 'completed').length === 0 ? (
+              {Array.isArray(jobs) && jobs.filter(j => j.job_lifecycle_status === 'completed').length === 0 ? (
                 <div className="text-center py-8 text-slate-500">
                   {t('dashboard.no_past_cleanings')}
                 </div>
               ) : (
-                jobs.filter(j => j.job_lifecycle_status === 'completed').map(job => (
+                Array.isArray(jobs) && jobs.filter(j => j.job_lifecycle_status === 'completed').map(job => (
                   <div key={job.id} className="bg-white rounded-2xl border border-slate-200 p-6 transition-all">
                     <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
                       <div>
@@ -734,6 +1125,46 @@ export default function Dashboard() {
         </div>
       </div>
       
+      {/* Payment Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-8">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold font-display text-slate-900">Complete Payment</h2>
+                <button 
+                  onClick={() => setShowPaymentModal(null)}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <Plus className="w-6 h-6 rotate-45 text-slate-400" />
+                </button>
+              </div>
+
+              {clientSecret && stripePromise ? (
+                <Elements stripe={stripePromise} options={{ clientSecret }}>
+                  <PaymentForm 
+                    jobId={showPaymentModal}
+                    amount={jobs.find(j => j.id === showPaymentModal)?.final_transaction_price || 0}
+                    breakdown={paymentBreakdown}
+                    onSuccess={() => {
+                      setShowPaymentModal(null);
+                      setActionMessage({ type: 'success', text: "Payment successful!" });
+                      fetchJobs();
+                    }}
+                    onCancel={() => setShowPaymentModal(null)}
+                  />
+                </Elements>
+              ) : (
+                <div className="py-12 flex flex-col items-center justify-center gap-4">
+                  <Clock className="w-10 h-10 text-emerald-500 animate-spin" />
+                  <p className="text-slate-500 font-medium">Preparing secure checkout...</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Rebook Modal */}
       {rebookModal.show && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -777,80 +1208,91 @@ export default function Dashboard() {
           </div>
         </div>
       )}
-
-      {/* Payment Modal */}
-      {showPaymentModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-8">
-              <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mb-6">
-                <DollarSign className="w-8 h-8 text-emerald-600" />
-              </div>
-              <h2 className="text-2xl font-bold font-display text-slate-900 mb-2">{t('dashboard.payment_title') || "Complete Payment"}</h2>
-              <p className="text-slate-500 mb-6">{t('dashboard.payment_desc') || "Securely pay for your completed cleaning service."}</p>
-              
-              <div className="bg-slate-50 rounded-2xl p-5 border border-slate-100 mb-8 space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">{t('dashboard.amount_due') || "Amount Due"}:</span>
-                  <span className="font-bold text-slate-900 text-xl">
-                    ${jobs.find(j => j.id === showPaymentModal)?.final_transaction_price.toFixed(2)}
-                  </span>
+        <ConfirmationModal
+          isOpen={deleteModal.show}
+          onClose={() => setDeleteModal({ show: false, propertyId: null })}
+          onConfirm={confirmDeleteProperty}
+          title="Delete Property"
+          message="Are you sure you want to delete this property? This action cannot be undone."
+        />
+        <CancelSubscriptionModal
+          isOpen={cancelModal.show}
+          onClose={() => setCancelModal({ show: false, sub: null, message: "" })}
+          onConfirm={confirmCancelSubscription}
+          message={cancelModal.message}
+        />
+        <ConfirmationModal
+          isOpen={cancelJobModal.show}
+          onClose={() => setCancelJobModal({ show: false, jobId: null })}
+          onConfirm={() => cancelJobModal.jobId && handleCancel(cancelJobModal.jobId)}
+          title="Cancel Booking"
+          message="Are you sure you want to cancel this booking?"
+        />
+        {subscriptionDetailsModal.show && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden animate-in zoom-in-95 duration-200">
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold font-display text-slate-900">Subscription Details</h2>
+                  <button 
+                    onClick={() => setSubscriptionDetailsModal({ show: false, sub: null })}
+                    className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                  >
+                    <X className="w-6 h-6 text-slate-400" />
+                  </button>
                 </div>
-                
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{t('dashboard.card_number') || "Card Number"}</label>
-                    <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-400 font-mono">
-                      •••• •••• •••• 4242
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{t('dashboard.expiry') || "Expiry"}</label>
-                      <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-400 font-mono">
-                        MM / YY
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto">
+                  {jobs.filter(j => j.subscription_id === subscriptionDetailsModal.sub.id)
+                    .sort((a, b) => new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime())
+                    .map(job => (
+                    <div key={job.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                      <div>
+                        <div className="font-bold text-slate-900">{formatDate(job.scheduled_date)}</div>
+                        <div className="text-sm text-slate-500">{job.job_lifecycle_status}</div>
                       </div>
+                      <button
+                        onClick={() => handlePostponeJob(job)}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-all"
+                      >
+                        Postpone
+                      </button>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">CVC</label>
-                      <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-400 font-mono">
-                        •••
-                      </div>
-                    </div>
-                  </div>
+                  ))}
                 </div>
-              </div>
-
-              <div className="space-y-3">
-                <button 
-                  onClick={() => handlePay(showPaymentModal)}
-                  disabled={isPaying}
-                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 flex items-center justify-center gap-2"
-                >
-                  {isPaying ? (
-                    <>
-                      <Clock className="w-5 h-5 animate-spin" />
-                      {t('dashboard.processing_payment') || "Processing..."}
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="w-5 h-5" />
-                      {t('dashboard.confirm_payment') || "Confirm Payment"}
-                    </>
-                  )}
-                </button>
-                <button 
-                  onClick={() => setShowPaymentModal(null)}
-                  disabled={isPaying}
-                  className="w-full py-3 text-slate-400 font-medium hover:text-slate-600 transition-colors"
-                >
-                  {t('common.cancel')}
-                </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+        {postponeModal.show && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+              <div className="p-8">
+                <h2 className="text-2xl font-bold font-display text-slate-900 mb-6">Postpone Job</h2>
+                <input 
+                  type="date" 
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 mb-6"
+                  value={newDate}
+                  onChange={e => setNewDate(e.target.value)}
+                />
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setPostponeModal({ show: false, job: null })}
+                    className="flex-1 py-3 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={confirmPostpone}
+                    disabled={isPostponing}
+                    className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500 transition-all disabled:opacity-50"
+                  >
+                    {isPostponing ? "Postponing..." : "Confirm"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
   );
 }

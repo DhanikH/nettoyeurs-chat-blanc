@@ -1,31 +1,11 @@
-import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ShieldCheck, Leaf, Clock, Sparkles, Droplets, Home as HomeIcon, Star } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { testimonials as staticTestimonials } from "../customer feedback/testimonials";
-import { fetchCmsContent } from "../services/cmsService";
 
 export default function Home() {
   const { t } = useTranslation();
-  const [testimonials, setTestimonials] = useState(staticTestimonials);
-
-  useEffect(() => {
-    const loadCmsContent = async () => {
-      const cmsTestimonials = await fetchCmsContent('testimonial');
-      if (cmsTestimonials && cmsTestimonials.length > 0) {
-        // Map Sanity schema to our app schema
-        const mapped = cmsTestimonials.map((t: any) => ({
-          id: t._id,
-          text: t.content,
-          name: t.author,
-          role: t.role,
-          initial: t.author.charAt(0)
-        }));
-        setTestimonials(mapped);
-      }
-    };
-    loadCmsContent();
-  }, []);
+  const testimonials = staticTestimonials;
 
   return (
     <div className="bg-slate-50 text-slate-800 font-sans">

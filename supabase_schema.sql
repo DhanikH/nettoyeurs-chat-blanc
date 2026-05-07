@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS Jobs (
     calculated_base_price REAL,
     final_transaction_price REAL,
     cleaner_payout REAL,
-    job_lifecycle_status TEXT NOT NULL CHECK (job_lifecycle_status IN ('pending_quote', 'pending_claim', 'claimed', 'claimed_scheduled', 'completed', 'cancelled')),
+    job_lifecycle_status TEXT NOT NULL CHECK (job_lifecycle_status IN ('pending_quote', 'pending_claim', 'claimed', 'claimed_scheduled', 'completed', 'cancelled', 'pending_homeowner_approval', 'homeowner_rejected')),
     special_instructions TEXT,
     window_cleaning INTEGER DEFAULT 0,
     oven_cleaning INTEGER DEFAULT 0,
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS Jobs (
     is_abandoned INTEGER DEFAULT 0,
     paid INTEGER DEFAULT 0,
     cleaner_paid INTEGER DEFAULT 0,
+    final_cleaner_payout REAL,
     rating INTEGER,
     review_comment TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -99,3 +100,5 @@ BEGIN
     WHERE id = user_id;
 END;
 $$ LANGUAGE plpgsql;
+
+ALTER TABLE Jobs ADD COLUMN IF NOT EXISTS penalty_status TEXT DEFAULT 'none';

@@ -9,38 +9,24 @@ export interface TeamMember {
 
 export const teamMembers: TeamMember[] = [
   {
-    id: "jessica",
-    name: "Jessica Benjamin",
-    role: "Cleaning Specialist",
-    bio: "Jessica is a dedicated professional with a keen eye for detail and a passion for creating spotless, welcoming environments.",
-    image: "https://images.unsplash.com/photo-1580489944761-15a19d654956?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
-  },
-  {
     id: "didacus",
-    name: "Didacus Okoth Atiang",
+    name: "Didacus Atiang",
     role: "Cleaning Specialist",
-    bio: "Didacus brings years of experience and a commitment to excellence, ensuring every home he touches shines.",
-    image: "https://images.unsplash.com/photo-1556157382-97eda2d62296?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
+    bio: "Hello, I'm Didacus Atiang, a professional Montreal cleaner. With a background in security, I bring trust, discipline, and meticulous attention to detail to every home I clean. From kitchens to carpets, I take pride in providing reliable, top-tier service to make your space safe, spotless, and welcoming. Bonjour, je suis Didacus Atiang, nettoyeur professionnel à Montréal. Fort d'une expérience en sécurité, j'apporte confiance, rigueur et un grand souci du détail à chaque domicile. Des cuisines aux tapis, je suis fier d'offrir un service fiable pour rendre votre espace sûr, impeccable et accueillant.",
+    image: "https://i.ibb.co/zHW01yTG/didacus-profile-picture.jpg"
   },
   {
-    id: "elena",
-    name: "Elena Rodriguez",
-    role: "Lead Cleaning Specialist",
-    bio: "With over 10 years of experience, Elena ensures every home meets our rigorous 50-point quality standard.",
-    image: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
+    id: "akilah",
+    name: "Akilah Phillips",
+    role: "Cleaning Specialist",
+    bio: "Hi, I'm Akilah, a Montreal-based cleaner with 4 years of experience in residential, Airbnb, and commercial spaces. Known for being reliable and detail-oriented, I take pride in delivering efficient, high-quality turnovers and deep cleans to always leave your space spotless and welcoming. Bonjour, je suis Akilah, nettoyeuse à Montréal avec 4 ans d'expérience dans les espaces résidentiels, Airbnb et commerciaux. Reconnue pour ma fiabilité et mon souci du détail, je suis fière d'offrir un nettoyage efficace et de haute qualité pour toujours laisser votre espace impeccable et accueillant.",
+    image: "https://i.ibb.co/bDhP1xJ/Akilah-profile-picture.jpg"
   },
   {
-    id: "marc",
-    name: "Marc Chen",
-    role: "Operations Manager",
-    bio: "Marcus coordinates our teams to ensure we are always on time, fully equipped, and ready to transform your space.",
-    image: "https://images.unsplash.com/photo-1556157382-97eda2d62296?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
-  },
-  {
-    id: "sarah",
-    name: "Sarah Jenkins",
-    role: "Eco-Cleaning Expert",
-    bio: "Sarah specializes in non-toxic, pet-safe cleaning solutions that leave your home fresh without harsh chemicals.",
-    image: "https://images.unsplash.com/photo-1580489944761-15a19d654956?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"
+    id: "ardo",
+    name: "Ardo Esse",
+    role: "Cleaning Specialist",
+    bio: "Hi everyone! My name is Esse . I’m a reliable and detail oriented cleaner with experience in residential cleaning. I take pride in providing high-quality service and making sure clients feel comfortable and satisfied. I’m excited to be part of the team and look forward to working with you all! Salut tout le monde ! Je m’appelle Esse. Je suis une personne fiable et minutieuse avec de l’expérience en entretien résidentiel. J’aime offrir un service de qualité et m’assurer que les clients sont satisfaits et à l’aise. Je suis contente de faire partie de l’équipe et j’ai hâte de travailler avec vous !",
+    image: "https://i.ibb.co/20RPzBgW/Ardo-profile-picture.jpg"
   }
 ];
