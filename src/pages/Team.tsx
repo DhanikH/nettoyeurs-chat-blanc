@@ -1,12 +1,11 @@
 import { motion } from "motion/react";
 import { ShieldCheck, Star, Heart } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { teamMembers as localTeamMembers } from "../the tam/members";
 import { useState } from "react";
 
 export default function Team() {
   const { t } = useTranslation();
-  const [members] = useState<any[]>(localTeamMembers);
+  const [members] = useState<any[]>([]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-16 pb-24">
